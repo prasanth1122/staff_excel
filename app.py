@@ -546,8 +546,8 @@ def convert_final_campaign_to_excel(df, unmatched_campaigns):
             safe_write(ws, product_row, 1, "ALL CAMPAIGNS (TOTAL)", product_total_fmt)
 
             # Totals (formulas)
-            purchases_refs = [f"{xl_col_to_name(purchases_col)}{i+1}" for i in range(row+2, row+1+len(product_df)+1)]
-            spent_refs = [f"{xl_col_to_name(spent_col)}{i+1}" for i in range(row+2, row+1+len(product_df)+1)]
+            purchases_refs = [f"{xl_col_to_name(purchases_col)}{i+1}" for i in range(row+1, row+1+len(product_df)+1)]
+            spent_refs = [f"{xl_col_to_name(spent_col)}{i+1}" for i in range(row+1, row+1+len(product_df)+1)]
 
             if purchases_refs:
                 ws.write_formula(product_row, purchases_col, f"=ROUND(SUM({','.join(purchases_refs)}),2)", product_total_fmt)
@@ -715,8 +715,4 @@ if campaign_file:
                 file_name="final_campaign_data.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
-
-
-
-
 
