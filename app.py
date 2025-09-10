@@ -364,12 +364,35 @@ def convert_shopify_to_excel_staff(df):
             "bold": True, "align": "center", "valign": "vcenter",
             "fg_color": "#BDD7EE", "font_name": "Calibri", "font_size": 11
         })
+        
+        # Grand total format (different color)
+        grand_total_format = workbook.add_format({
+            "bold": True, "align": "left", "valign": "vcenter",
+            "fg_color": "#EEEE0E", "font_name": "Calibri", "font_size": 11  # Green
+        })
+        
+        # Product total format (different color)
         product_total_format = workbook.add_format({
             "bold": True, "align": "left", "valign": "vcenter",
-            "fg_color": "#FFD966", "font_name": "Calibri", "font_size": 11
+            "fg_color": "#E7EE94", "font_name": "Calibri", "font_size": 11  # Yellow
         })
+        
         variant_format = workbook.add_format({
             "align": "left", "valign": "vcenter",
+            "font_name": "Calibri", "font_size": 11
+        })
+        
+        # Low items format for products with net items sold < 5
+        low_items_product_format = workbook.add_format({
+            "bold": True, "align": "left", "valign": "vcenter",
+            "fg_color": "#DC4E23",  # Red
+            "font_name": "Calibri", "font_size": 11
+        })
+        
+        # Low items format for variants under low-performing products
+        low_items_variant_format = workbook.add_format({
+            "align": "left", "valign": "vcenter",
+            "fg_color": "#FFCCCB",  # Light red
             "font_name": "Calibri", "font_size": 11
         })
 
@@ -384,14 +407,33 @@ def convert_shopify_to_excel_staff(df):
         for col_num, col_name in enumerate(visible_cols):
             worksheet.write(0, col_num, col_name, header_format)
 
-        row = 1
-        for product, product_df in df.groupby("Product title"):
-            # Product total row
-            product_total_row_idx = row
-            worksheet.write(product_total_row_idx, 0, product, product_total_format)
-            worksheet.write(product_total_row_idx, 1, "ALL VARIANTS (TOTAL)", product_total_format)
+        # Insert GRAND TOTAL row right after header
+        grand_total_row = 1
+        worksheet.write(grand_total_row, 0, "GRAND TOTAL", grand_total_format)
+        worksheet.write(grand_total_row, 1, "ALL PRODUCTS", grand_total_format)
 
+        row = grand_total_row + 1
+        product_total_rows = []
+
+        for product, product_df in df.groupby("Product title"):
+            product_total_row_idx = row
+            product_total_rows.append(product_total_row_idx)
+
+            # Calculate total net items sold for this product to determine if it's low performing
+            total_net_items = product_df["Net items sold"].fillna(0).sum()
+            is_low_performing = total_net_items < 5
+            
+            # Choose format based on performance
+            current_product_format = low_items_product_format if is_low_performing else product_total_format
+            current_variant_format = low_items_variant_format if is_low_performing else variant_format
+
+            # Product total label
+            worksheet.write(product_total_row_idx, 0, product, current_product_format)
+            worksheet.write(product_total_row_idx, 1, "ALL VARIANTS (TOTAL)", current_product_format)
+
+            # Variants
             row += 1
+            first_variant_row = row
             for _, variant in product_df.iterrows():
                 variant_row_idx = row
                 excel_row = variant_row_idx + 1  # Excel is 1-based
@@ -404,27 +446,116 @@ def convert_shopify_to_excel_staff(df):
                 C = variant.get("Product Cost (Input)", 0) or 0
                 R = variant.get("Delivery Rate", 0) or 0
 
-                # Write visible values
-                worksheet.write(variant_row_idx, 0, "", variant_format)
-                worksheet.write(variant_row_idx, 1, variant.get("Product variant title", ""), variant_format)
-                worksheet.write(variant_row_idx, 2, P, variant_format)
-                worksheet.write(variant_row_idx, 3, S, variant_format)
-                worksheet.write(variant_row_idx, 4, A_usd, variant_format)
-                worksheet.write(variant_row_idx, 5, C, variant_format)
-                worksheet.write(variant_row_idx, 6, R, variant_format)
-                
-                # Write Excel formula for Score column
-                # Column references: C=Price(C), D=Items(D), E=AdSpend(E), F=Cost(F), G=DeliveryRate(G)
-                # Formula: ((P * S * R_frac) - (A * 100) - (77 * S) - (65 * S) - (C * S * R_frac)) / ((P * S * R_frac) * 0.1)
-                # Where R_frac = IF(G > 1, G/100, G) to handle both percentage and fraction inputs
-                
-                formula = f'=IF(AND(C{excel_row}>0,D{excel_row}>0),((C{excel_row}*D{excel_row}*IF(G{excel_row}>1,G{excel_row}/100,G{excel_row}))-(E{excel_row}*100)-(77*D{excel_row})-(65*D{excel_row})-(F{excel_row}*D{excel_row}*IF(G{excel_row}>1,G{excel_row}/100,G{excel_row})))/((C{excel_row}*D{excel_row}*IF(G{excel_row}>1,G{excel_row}/100,G{excel_row}))*0.1),0)'
-                
-                worksheet.write_formula(variant_row_idx, 7, formula, variant_format)
+                # Write values
+                worksheet.write(variant_row_idx, 0, "", current_variant_format)
+                worksheet.write(variant_row_idx, 1, variant.get("Product variant title", ""), current_variant_format)
+                worksheet.write(variant_row_idx, 2, P, current_variant_format)
+                worksheet.write(variant_row_idx, 3, S, current_variant_format)
+                worksheet.write(variant_row_idx, 4, A_usd, current_variant_format)
+                worksheet.write(variant_row_idx, 5, C, current_variant_format)
+                worksheet.write(variant_row_idx, 6, R, current_variant_format)
+
+                # Score formula
+                formula = f'''=IF(AND(C{excel_row}>0,D{excel_row}>0),
+                    ((C{excel_row}*D{excel_row}*IF(G{excel_row}>1,G{excel_row}/100,G{excel_row}))
+                    -(E{excel_row}*100)-(77*D{excel_row})-(65*D{excel_row})
+                    -(F{excel_row}*D{excel_row}*IF(G{excel_row}>1,G{excel_row}/100,G{excel_row})))
+                    /((C{excel_row}*D{excel_row}*IF(G{excel_row}>1,G{excel_row}/100,G{excel_row}))*0.1),0)'''
+                worksheet.write_formula(variant_row_idx, 7, formula, current_variant_format)
 
                 row += 1
+                
+            last_variant_row = row - 1
 
-        worksheet.freeze_panes(1, 0)
+            # Totals formulas for product row
+            excel_first = first_variant_row + 1
+            excel_last = last_variant_row + 1
+            worksheet.write_formula(product_total_row_idx, 3, f"=SUM(D{excel_first}:D{excel_last})", current_product_format)  # Net items sold
+            worksheet.write_formula(product_total_row_idx, 4, f"=SUM(E{excel_first}:E{excel_last})", current_product_format)  # Ad Spend USD
+
+            # Weighted avg Price
+            worksheet.write_formula(product_total_row_idx, 2,
+                f"=IF(SUM(D{excel_first}:D{excel_last})=0,0,"
+                f"SUMPRODUCT(C{excel_first}:C{excel_last},D{excel_first}:D{excel_last})/SUM(D{excel_first}:D{excel_last}))",
+                current_product_format)
+
+            # Weighted avg Cost
+            worksheet.write_formula(product_total_row_idx, 5,
+                f"=IF(SUM(D{excel_first}:D{excel_last})=0,0,"
+                f"SUMPRODUCT(F{excel_first}:F{excel_last},D{excel_first}:D{excel_last})/SUM(D{excel_first}:D{excel_last}))",
+                current_product_format)
+
+            # Weighted avg Delivery Rate
+            worksheet.write_formula(product_total_row_idx, 6,
+                f"=IF(SUM(D{excel_first}:D{excel_last})=0,0,"
+                f"SUMPRODUCT(G{excel_first}:G{excel_last},D{excel_first}:D{excel_last})/SUM(D{excel_first}:D{excel_last}))",
+                current_product_format)
+
+            # Score formula for product totals
+            product_excel_row = product_total_row_idx + 1
+            score_formula = f'''=IF(AND(C{product_excel_row}>0,D{product_excel_row}>0),
+                ((C{product_excel_row}*D{product_excel_row}*IF(G{product_excel_row}>1,G{product_excel_row}/100,G{product_excel_row}))
+                -(E{product_excel_row}*100)-(77*D{product_excel_row})-(65*D{product_excel_row})
+                -(F{product_excel_row}*D{product_excel_row}*IF(G{product_excel_row}>1,G{product_excel_row}/100,G{product_excel_row})))
+                /((C{product_excel_row}*D{product_excel_row}*IF(G{product_excel_row}>1,G{product_excel_row}/100,G{product_excel_row}))*0.1),0)'''
+            worksheet.write_formula(product_total_row_idx, 7, score_formula, current_product_format)
+            
+        # GRAND TOTAL formulas - FIXED to include all product total rows
+        if product_total_rows:
+            # Convert all product total row indices to Excel row numbers (1-based)
+            excel_rows = [str(row_idx + 1) for row_idx in product_total_rows]
+            rows_range = ",".join([f"D{row}" for row in excel_rows])
+            
+            # Net items sold - sum all product totals (no division by 2)
+            worksheet.write_formula(grand_total_row, 3, f"=SUM({rows_range})", grand_total_format)
+            
+            # Ad Spend USD - sum all product totals (no division by 2)
+            ad_spend_range = ",".join([f"E{row}" for row in excel_rows])
+            worksheet.write_formula(grand_total_row, 4, f"=SUM({ad_spend_range})", grand_total_format)
+
+            # For weighted averages, we need to use all individual variants, not product totals
+            # Find the range of all variant rows (excluding product total rows)
+            all_variant_rows = []
+            current_row = grand_total_row + 1  # Start after grand total (row 2 in 0-indexed)
+            
+            for product, product_df in df.groupby("Product title"):
+                current_row += 1  # Skip product total row
+                for _ in range(len(product_df)):  # Add variant rows
+                    all_variant_rows.append(current_row)
+                    current_row += 1
+            
+            if all_variant_rows:
+                first_variant_excel = all_variant_rows[0]
+                last_variant_excel = all_variant_rows[-1]
+                
+                # Weighted avg Price
+                worksheet.write_formula(grand_total_row, 2,
+                    f"=IF(SUM(D{first_variant_excel}:D{last_variant_excel})=0,0,"
+                    f"SUMPRODUCT(C{first_variant_excel}:C{last_variant_excel},D{first_variant_excel}:D{last_variant_excel})/SUM(D{first_variant_excel}:D{last_variant_excel}))",
+                    grand_total_format)
+
+                # Weighted avg Cost
+                worksheet.write_formula(grand_total_row, 5,
+                    f"=IF(SUM(D{first_variant_excel}:D{last_variant_excel})=0,0,"
+                    f"SUMPRODUCT(F{first_variant_excel}:F{last_variant_excel},D{first_variant_excel}:D{last_variant_excel})/SUM(D{first_variant_excel}:D{last_variant_excel}))",
+                    grand_total_format)
+
+                # Weighted avg Delivery Rate
+                worksheet.write_formula(grand_total_row, 6,
+                    f"=IF(SUM(D{first_variant_excel}:D{last_variant_excel})=0,0,"
+                    f"SUMPRODUCT(G{first_variant_excel}:G{last_variant_excel},D{first_variant_excel}:D{last_variant_excel})/SUM(D{first_variant_excel}:D{last_variant_excel}))",
+                    grand_total_format)
+
+            # Score for grand total
+            gt_excel_row = grand_total_row + 1
+            score_formula = f'''=IF(AND(C{gt_excel_row}>0,D{gt_excel_row}>0),
+                ((C{gt_excel_row}*D{gt_excel_row}*IF(G{gt_excel_row}>1,G{gt_excel_row}/100,G{gt_excel_row}))
+                -(E{gt_excel_row}*100)-(77*D{gt_excel_row})-(65*D{gt_excel_row})
+                -(F{gt_excel_row}*D{gt_excel_row}*IF(G{gt_excel_row}>1,G{gt_excel_row}/100,G{gt_excel_row})))
+                /((C{gt_excel_row}*D{gt_excel_row}*IF(G{gt_excel_row}>1,G{gt_excel_row}/100,G{gt_excel_row}))*0.1),0)'''
+            worksheet.write_formula(grand_total_row, 7, score_formula, grand_total_format)
+
+        worksheet.freeze_panes(2, 0)
         for i, col in enumerate(visible_cols):
             if col in ("Product title", "Product variant title"):
                 worksheet.set_column(i, i, 35)
@@ -432,9 +563,9 @@ def convert_shopify_to_excel_staff(df):
                 worksheet.set_column(i, i, 15)
 
     return output.getvalue()
-
-
     
+
+
 # ---- SHOPIFY DOWNLOAD ----
 if df_shopify is not None:
     export_df = df_shopify.drop(columns=["Product Name", "Canonical Product"], errors="ignore")
@@ -688,6 +819,7 @@ def convert_final_campaign_to_excel(df, unmatched_campaigns):
     return output.getvalue()
 
 
+
 # ---- CAMPAIGN DOWNLOAD ----
 if campaign_file:
     def convert_df_to_excel(df):
@@ -715,4 +847,3 @@ if campaign_file:
                 file_name="final_campaign_data.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
-
