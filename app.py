@@ -879,6 +879,8 @@ def convert_shopify_to_excel_staff_simple(df):
 
     return output.getvalue()
 
+
+
 def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
     """Convert Shopify data to Excel for staff with date columns and scoring focus"""
     if df is None or df.empty:
@@ -949,8 +951,8 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
             "fg_color": "#D9E1F2", "font_name": "Calibri", "font_size": 11
         })
 
-        # Define base columns for staff (with new Total Net items sold column)
-        base_columns = ["Product title", "Product variant title", "Delivery Rate", "Product Cost (Input)", "Total Net items sold"]
+        # Define base columns for staff (with new Total Net items sold, Amount Spent, and Cost Per Item columns)
+        base_columns = ["Product title", "Product variant title", "Delivery Rate", "Product Cost (Input)", "Total Net items sold", "Amount Spent", "Cost Per Item"]
         
         # Define staff metrics (simplified - only 6 metrics per date)
         date_metrics = ["Net items sold", "Avg Price", "Ad Spend (USD)", "Delivery Rate", "Product Cost Input", "Score"]
@@ -981,7 +983,7 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
                 safe_write(worksheet, 0, col_num, col_name, header_format)
 
         # SET UP COLUMN GROUPING
-        start_col = 6  # After base columns + separator (now 5 base columns + 1 separator)
+        start_col = 8  # After base columns + separator (now 7 base columns + 1 separator)
         total_columns = len(all_columns)
         
         group_level = 1
@@ -1011,8 +1013,8 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
         
         # Set base column widths
         worksheet.set_column(0, 1, 25)  # Product title and variant title
-        worksheet.set_column(2, 4, 15)  # Base delivery rate, product cost, total net items
-        worksheet.set_column(5, 5, 3)   # Separator column
+        worksheet.set_column(2, 6, 15)  # Base delivery rate, product cost, total net items, amount spent, cost per item
+        worksheet.set_column(7, 7, 3)   # Separator column
 
         worksheet.outline_settings(
             symbols_below=True,
@@ -1082,8 +1084,10 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
                 safe_write(worksheet, variant_row_idx, 2, round(avg_delivery_rate, 2), variant_format)
                 safe_write(worksheet, variant_row_idx, 3, round(avg_product_cost, 2), variant_format)
                 
-                # Leave Total Net items sold column empty for variants
+                # Leave Total Net items sold, Amount Spent, and Cost Per Item columns empty for variants (will be calculated via formulas)
                 safe_write(worksheet, variant_row_idx, 4, "", variant_format)
+                safe_write(worksheet, variant_row_idx, 5, "", variant_format)
+                safe_write(worksheet, variant_row_idx, 6, "", variant_format)
                 
                 # Cell references for base columns
                 excel_row = variant_row_idx + 1
@@ -1274,6 +1278,29 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
                                 variant_format
                             )
                 
+                # Calculate "Total Net items sold" for base column (link to total column)
+                total_net_items_col_idx = all_columns.index("Total_Net items sold")
+                worksheet.write_formula(
+                    variant_row_idx, 4,
+                    f"={xl_col_to_name(total_net_items_col_idx)}{excel_row}",
+                    variant_format
+                )
+                
+                # Calculate "Amount Spent" for base column (link to Total Ad Spend)
+                total_ad_spend_col_idx = all_columns.index("Total_Ad Spend (USD)")
+                worksheet.write_formula(
+                    variant_row_idx, 5,
+                    f"={xl_col_to_name(total_ad_spend_col_idx)}{excel_row}",
+                    variant_format
+                )
+                
+                # Calculate "Cost Per Item" for base column (Amount Spent / Net Items Sold)
+                worksheet.write_formula(
+                    variant_row_idx, 6,
+                    f"=ROUND(IF(E{excel_row}=0,0,F{excel_row}/E{excel_row}),2)",
+                    variant_format
+                )
+                
                 row += 1
             
             # Calculate product totals by aggregating variant rows using RANGES
@@ -1387,8 +1414,13 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
                 # Base columns for product totals
                 base_delivery_rate_col = 2
                 base_product_cost_col = 3
+                base_total_net_items_col = 4
+                base_amount_spent_col = 5
+                base_cost_per_item_col = 6
                 total_delivery_rate_col_idx = all_columns.index("Total_Delivery Rate")
                 total_product_cost_col_idx = all_columns.index("Total_Product Cost Input")
+                total_net_items_col_idx = all_columns.index("Total_Net items sold")
+                total_ad_spend_col_idx = all_columns.index("Total_Ad Spend (USD)")
                 
                 worksheet.write_formula(
                     product_total_row_idx, base_delivery_rate_col,
@@ -1401,6 +1433,26 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
                     f"={xl_col_to_name(total_product_cost_col_idx)}{product_total_row_idx+1}",
                     product_total_format
                 )
+                
+                worksheet.write_formula(
+                    product_total_row_idx, base_total_net_items_col,
+                    f"={xl_col_to_name(total_net_items_col_idx)}{product_total_row_idx+1}",
+                    product_total_format
+                )
+                
+                worksheet.write_formula(
+                    product_total_row_idx, base_amount_spent_col,
+                    f"={xl_col_to_name(total_ad_spend_col_idx)}{product_total_row_idx+1}",
+                    product_total_format
+                )
+                
+                # Calculate "Cost Per Item" for product total (Amount Spent / Net Items Sold)
+                product_excel_row = product_total_row_idx + 1
+                worksheet.write_formula(
+                    product_total_row_idx, base_cost_per_item_col,
+                    f"=ROUND(IF(E{product_excel_row}=0,0,F{product_excel_row}/E{product_excel_row}),2)",
+                    product_total_format
+                )
 
         # Calculate grand totals using INDIVIDUAL PRODUCT TOTAL ROWS ONLY
         if product_total_rows:
@@ -1408,9 +1460,12 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
             base_delivery_rate_col = 2
             base_product_cost_col = 3
             base_total_net_items_col = 4
+            base_amount_spent_col = 5
+            base_cost_per_item_col = 6
             total_delivery_rate_col_idx = all_columns.index("Total_Delivery Rate")
             total_product_cost_col_idx = all_columns.index("Total_Product Cost Input")
             total_net_items_col_idx = all_columns.index("Total_Net items sold")
+            total_ad_spend_col_idx = all_columns.index("Total_Ad Spend (USD)")
             
             worksheet.write_formula(
                 grand_total_row_idx, base_delivery_rate_col,
@@ -1427,6 +1482,20 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
             worksheet.write_formula(
                 grand_total_row_idx, base_total_net_items_col,
                 f"={xl_col_to_name(total_net_items_col_idx)}{grand_total_row_idx+1}",
+                grand_total_format
+            )
+            
+            worksheet.write_formula(
+                grand_total_row_idx, base_amount_spent_col,
+                f"={xl_col_to_name(total_ad_spend_col_idx)}{grand_total_row_idx+1}",
+                grand_total_format
+            )
+            
+            # Calculate "Cost Per Item" for grand total (Amount Spent / Net Items Sold)
+            grand_excel_row = grand_total_row_idx + 1
+            worksheet.write_formula(
+                grand_total_row_idx, base_cost_per_item_col,
+                f"=ROUND(IF(E{grand_excel_row}=0,0,F{grand_excel_row}/E{grand_excel_row}),2)",
                 grand_total_format
             )
             
@@ -1569,7 +1638,6 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
         worksheet.freeze_panes(2, len(base_columns))
     
     return output.getvalue()
-
 
 
 def convert_final_campaign_to_excel_staff_simple(df):
@@ -1733,7 +1801,6 @@ def convert_final_campaign_to_excel_staff_simple(df):
 
     return output.getvalue()
 
-
 def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df=None):
     """Convert Campaign data to Excel for staff with day-wise lookups and scoring focus"""
     if df.empty:
@@ -1782,8 +1849,8 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
         # Get unique dates and sort them
         unique_dates = sorted([str(d) for d in df['Date'].unique() if pd.notna(d) and str(d).strip() != ''])
         
-        # Define base columns for staff (with new Total Amount Spent column)
-        base_columns = ["Product Name", "Campaign Name", "Total Amount Spent (USD)"]
+        # Define base columns for staff (NOW INCLUDING Amount Spent Zero Score as 6th column)
+        base_columns = ["Product Name", "Campaign Name", "Total Amount Spent (USD)", "Purchases", "Cost Per Purchase", "Amount Spent (Zero Score)"]
         
         # Define staff metrics (simplified - only 6 metrics per date for campaigns)
         date_metrics = ["Amount Spent (USD)", "Purchases", "Cost Per Purchase (USD)", "Avg Price", "Delivery Rate", "Score"]
@@ -1818,7 +1885,7 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
                 safe_write(worksheet, 0, col_num, col_name, header_format)
 
         # SET UP COLUMN GROUPING
-        start_col = 4  # After base columns + separator (now 3 base columns + 1 separator)
+        start_col = 7  # After base columns + separator (now 6 base columns + 1 separator)
         total_columns = len(all_columns)
         
         group_level = 1
@@ -1850,7 +1917,10 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
         worksheet.set_column(0, 0, 25)  # Product Name
         worksheet.set_column(1, 1, 30)  # Campaign Name
         worksheet.set_column(2, 2, 20)  # Total Amount Spent (USD)
-        worksheet.set_column(3, 3, 3)   # Separator column
+        worksheet.set_column(3, 3, 15)  # Purchases
+        worksheet.set_column(4, 4, 18)  # Cost Per Purchase
+        worksheet.set_column(5, 5, 22)  # Amount Spent (Zero Score)
+        worksheet.set_column(6, 6, 3)   # Separator column
 
         # Configure outline settings
         worksheet.outline_settings(
@@ -1880,15 +1950,17 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
             product_total_row_idx = row
             product_total_rows.append(product_total_row_idx)
 
-            # Calculate total amount spent for this product
+            # Calculate totals for this product
             total_amount_spent_for_product = product_df["Amount Spent (USD)"].sum()
+            total_purchases_for_product = product_df["Purchases"].sum()
 
             # Product total row
             safe_write(worksheet, product_total_row_idx, 0, product, product_total_format)
             safe_write(worksheet, product_total_row_idx, 1, "ALL CAMPAIGNS (TOTAL)", product_total_format)
             
-            # Add Total Amount Spent for product header only
+            # Add totals for product header only
             safe_write(worksheet, product_total_row_idx, 2, round(total_amount_spent_for_product, 2), product_total_format)
+            safe_write(worksheet, product_total_row_idx, 3, total_purchases_for_product, product_total_format)
 
             # Group campaigns within product
             campaign_rows = []
@@ -1920,8 +1992,11 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
                 safe_write(worksheet, campaign_row_idx, 0, product, campaign_format)
                 safe_write(worksheet, campaign_row_idx, 1, campaign_name, campaign_format)
                 
-                # Leave Total Amount Spent column empty for campaigns
+                # Leave base columns empty for campaigns (will be calculated via formulas)
                 safe_write(worksheet, campaign_row_idx, 2, "", campaign_format)
+                safe_write(worksheet, campaign_row_idx, 3, "", campaign_format)
+                safe_write(worksheet, campaign_row_idx, 4, "", campaign_format)
+                safe_write(worksheet, campaign_row_idx, 5, "", campaign_format)
                 
                 # Cell references for Excel formulas
                 excel_row = campaign_row_idx + 1
@@ -2096,6 +2171,61 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
                                 campaign_format
                             )
                 
+                # Calculate base columns for campaign (link to total columns)
+                total_amount_spent_col_idx = all_columns.index("Total_Amount Spent (USD)")
+                total_purchases_col_idx = all_columns.index("Total_Purchases")
+                total_cost_per_purchase_col_idx = all_columns.index("Total_Cost Per Purchase (USD)")
+                
+                worksheet.write_formula(
+                    campaign_row_idx, 2,
+                    f"={xl_col_to_name(total_amount_spent_col_idx)}{excel_row}",
+                    campaign_format
+                )
+                
+                worksheet.write_formula(
+                    campaign_row_idx, 3,
+                    f"={xl_col_to_name(total_purchases_col_idx)}{excel_row}",
+                    campaign_format
+                )
+                
+                worksheet.write_formula(
+                    campaign_row_idx, 4,
+                    f"={xl_col_to_name(total_cost_per_purchase_col_idx)}{excel_row}",
+                    campaign_format
+                )
+                
+                # CORRECTED "Amount Spent (Zero Score)" FORMULA
+                # For Score = 0, the numerator must be 0:
+                # Revenue - Amount_Spent*100 - Fixed_Costs - Product_Costs = 0
+                # Amount_Spent = (Revenue - Fixed_Costs - Product_Costs) / 100
+                
+                total_avg_price_col_idx = all_columns.index("Total_Avg Price")
+                total_delivery_rate_col_idx = all_columns.index("Total_Delivery Rate")
+                
+                total_avg_price_ref = f"{xl_col_to_name(total_avg_price_col_idx)}{excel_row}"
+                total_purchases_ref = f"{xl_col_to_name(total_purchases_col_idx)}{excel_row}"
+                total_delivery_rate_ref = f"{xl_col_to_name(total_delivery_rate_col_idx)}{excel_row}"
+                
+                # Get average product cost for this product across all dates
+                product_costs = []
+                for date in unique_dates:
+                    date_cost = product_date_cost_inputs.get(product, {}).get(date, 0)
+                    if date_cost > 0:
+                        product_costs.append(date_cost)
+                avg_product_cost = sum(product_costs) / len(product_costs) if product_costs else 0
+                
+                # CORRECTED ZERO SCORE FORMULA: Solve for Amount_Spent when numerator = 0
+                zero_score_formula = f'''=IF(AND({total_avg_price_ref}>0,{total_purchases_ref}>0),
+                    (({total_avg_price_ref}*{total_purchases_ref}*IF(ISNUMBER({total_delivery_rate_ref}),IF({total_delivery_rate_ref}>1,{total_delivery_rate_ref}/100,{total_delivery_rate_ref}),0))
+                    -(77*{total_purchases_ref})-(65*{total_purchases_ref})
+                    -({avg_product_cost}*{total_purchases_ref}*IF(ISNUMBER({total_delivery_rate_ref}),IF({total_delivery_rate_ref}>1,{total_delivery_rate_ref}/100,{total_delivery_rate_ref}),0)))/100,0)'''
+                
+                worksheet.write_formula(
+                    campaign_row_idx, 5,
+                    zero_score_formula,
+                    campaign_format
+                )
+                
                 row += 1
             
             # Calculate product totals by aggregating campaign rows using RANGES
@@ -2232,16 +2362,107 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
                             f"=SUM({col_range})",
                             product_total_format
                         )
+                
+                # Calculate base columns for product total (link to total columns)
+                total_amount_spent_col_idx = all_columns.index("Total_Amount Spent (USD)")
+                total_purchases_col_idx = all_columns.index("Total_Purchases")
+                total_cost_per_purchase_col_idx = all_columns.index("Total_Cost Per Purchase (USD)")
+                
+                worksheet.write_formula(
+                    product_total_row_idx, 2,
+                    f"={xl_col_to_name(total_amount_spent_col_idx)}{product_total_row_idx+1}",
+                    product_total_format
+                )
+                
+                worksheet.write_formula(
+                    product_total_row_idx, 3,
+                    f"={xl_col_to_name(total_purchases_col_idx)}{product_total_row_idx+1}",
+                    product_total_format
+                )
+                
+                worksheet.write_formula(
+                    product_total_row_idx, 4,
+                    f"={xl_col_to_name(total_cost_per_purchase_col_idx)}{product_total_row_idx+1}",
+                    product_total_format
+                )
+                
+                # CORRECTED "Amount Spent (Zero Score)" for product total
+                total_avg_price_col_idx = all_columns.index("Total_Avg Price")
+                total_delivery_rate_col_idx = all_columns.index("Total_Delivery Rate")
+                
+                total_avg_price_ref = f"{xl_col_to_name(total_avg_price_col_idx)}{product_total_row_idx+1}"
+                total_purchases_ref = f"{xl_col_to_name(total_purchases_col_idx)}{product_total_row_idx+1}"
+                total_delivery_rate_ref = f"{xl_col_to_name(total_delivery_rate_col_idx)}{product_total_row_idx+1}"
+                
+                # Get average product cost for this product across all dates
+                product_costs = []
+                for date in unique_dates:
+                    date_cost = product_date_cost_inputs.get(product, {}).get(date, 0)
+                    if date_cost > 0:
+                        product_costs.append(date_cost)
+                avg_product_cost = sum(product_costs) / len(product_costs) if product_costs else 0
+                
+                zero_score_formula = f'''=IF(AND({total_avg_price_ref}>0,{total_purchases_ref}>0),
+                    (({total_avg_price_ref}*{total_purchases_ref}*IF(ISNUMBER({total_delivery_rate_ref}),IF({total_delivery_rate_ref}>1,{total_delivery_rate_ref}/100,{total_delivery_rate_ref}),0))
+                    -(77*{total_purchases_ref})-(65*{total_purchases_ref})
+                    -({avg_product_cost}*{total_purchases_ref}*IF(ISNUMBER({total_delivery_rate_ref}),IF({total_delivery_rate_ref}>1,{total_delivery_rate_ref}/100,{total_delivery_rate_ref}),0)))/100,0)'''
+                
+                worksheet.write_formula(
+                    product_total_row_idx, 5,
+                    zero_score_formula,
+                    product_total_format
+                )
 
         # Calculate grand totals using INDIVIDUAL PRODUCT TOTAL ROWS ONLY
         if product_total_rows:
-            # Add Total Amount Spent to grand total
-            base_total_amount_spent_col = 2
+            # Add base columns to grand total
             total_amount_spent_col_idx = all_columns.index("Total_Amount Spent (USD)")
+            total_purchases_col_idx = all_columns.index("Total_Purchases")
+            total_cost_per_purchase_col_idx = all_columns.index("Total_Cost Per Purchase (USD)")
             
             worksheet.write_formula(
-                grand_total_row_idx, base_total_amount_spent_col,
+                grand_total_row_idx, 2,
                 f"={xl_col_to_name(total_amount_spent_col_idx)}{grand_total_row_idx+1}",
+                grand_total_format
+            )
+            
+            worksheet.write_formula(
+                grand_total_row_idx, 3,
+                f"={xl_col_to_name(total_purchases_col_idx)}{grand_total_row_idx+1}",
+                grand_total_format
+            )
+            
+            worksheet.write_formula(
+                grand_total_row_idx, 4,
+                f"={xl_col_to_name(total_cost_per_purchase_col_idx)}{grand_total_row_idx+1}",
+                grand_total_format
+            )
+            
+            # CORRECTED "Amount Spent (Zero Score)" for grand total
+            total_avg_price_col_idx = all_columns.index("Total_Avg Price")
+            total_delivery_rate_col_idx = all_columns.index("Total_Delivery Rate")
+            
+            total_avg_price_ref = f"{xl_col_to_name(total_avg_price_col_idx)}{grand_total_row_idx+1}"
+            total_purchases_ref = f"{xl_col_to_name(total_purchases_col_idx)}{grand_total_row_idx+1}"
+            total_delivery_rate_ref = f"{xl_col_to_name(total_delivery_rate_col_idx)}{grand_total_row_idx+1}"
+            
+            # Calculate average product cost across all products and dates
+            all_product_costs = []
+            for prod in df['Product'].unique():
+                for dt in unique_dates:
+                    cost = product_date_cost_inputs.get(prod, {}).get(dt, 0)
+                    if cost > 0:
+                        all_product_costs.append(cost)
+            grand_avg_product_cost = sum(all_product_costs) / len(all_product_costs) if all_product_costs else 0
+            
+            zero_score_formula = f'''=IF(AND({total_avg_price_ref}>0,{total_purchases_ref}>0),
+                (({total_avg_price_ref}*{total_purchases_ref}*IF(ISNUMBER({total_delivery_rate_ref}),IF({total_delivery_rate_ref}>1,{total_delivery_rate_ref}/100,{total_delivery_rate_ref}),0))
+                -(77*{total_purchases_ref})-(65*{total_purchases_ref})
+                -({grand_avg_product_cost}*{total_purchases_ref}*IF(ISNUMBER({total_delivery_rate_ref}),IF({total_delivery_rate_ref}>1,{total_delivery_rate_ref}/100,{total_delivery_rate_ref}),0)))/100,0)'''
+            
+            worksheet.write_formula(
+                grand_total_row_idx, 5,
+                zero_score_formula,
                 grand_total_format
             )
             
@@ -2503,7 +2724,6 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
         unmatched_sheet.set_column(7, 7, 40)  # Reason
         
     return output.getvalue()
-
 
 # ---- DOWNLOAD SECTIONS ----
 st.header("📥 Download Processed Files")
