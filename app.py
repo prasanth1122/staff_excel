@@ -892,22 +892,26 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
         worksheet = workbook.add_worksheet("Shopify Staff")
         writer.sheets["Shopify Staff"] = worksheet
 
-        # Staff-specific formats
+        # Staff-specific formats (with two decimal places)
         header_format = workbook.add_format({
             "bold": True, "align": "center", "valign": "vcenter",
-            "fg_color": "#BDD7EE", "font_name": "Calibri", "font_size": 11
+            "fg_color": "#BDD7EE", "font_name": "Calibri", "font_size": 11,
+            "num_format": "#,##0.00"
         })
         date_header_format = workbook.add_format({
             "bold": True, "align": "center", "valign": "vcenter",
-            "fg_color": "#B4C6E7", "font_name": "Calibri", "font_size": 11
+            "fg_color": "#B4C6E7", "font_name": "Calibri", "font_size": 11,
+            "num_format": "#,##0.00"
         })
         total_header_format = workbook.add_format({
             "bold": True, "align": "center", "valign": "vcenter",
-            "fg_color": "#FFD966", "font_name": "Calibri", "font_size": 11
+            "fg_color": "#FFD966", "font_name": "Calibri", "font_size": 11,
+            "num_format": "#,##0.00"
         })
         grand_total_format = workbook.add_format({
             "bold": True, "align": "left", "valign": "vcenter",
-            "fg_color": "#EEEE0E", "font_name": "Calibri", "font_size": 11
+            "fg_color": "#EEEE0E", "font_name": "Calibri", "font_size": 11,
+            "num_format": "#,##0.00"
         })
         
         # Check if we have dates
@@ -923,36 +927,42 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
         # Calculate dynamic threshold
         dynamic_threshold = num_days * 5
         
-        # Dynamic conditional formats based on calculated threshold
+        # Dynamic conditional formats based on calculated threshold (with two decimal places)
         product_total_format_low = workbook.add_format({
             "bold": True, "align": "left", "valign": "vcenter",
-            "fg_color": "#DC4E23", "font_name": "Calibri", "font_size": 11  # Red
+            "fg_color": "#DC4E23", "font_name": "Calibri", "font_size": 11,  # Red
+            "num_format": "#,##0.00"
         })
         variant_format_low = workbook.add_format({
             "align": "left", "valign": "vcenter",
-            "fg_color": "#FFCCCB", "font_name": "Calibri", "font_size": 11  # Light red
+            "fg_color": "#FFCCCB", "font_name": "Calibri", "font_size": 11,  # Light red
+            "num_format": "#,##0.00"
         })
         
         product_total_format_medium = workbook.add_format({
             "bold": True, "align": "left", "valign": "vcenter",
-            "fg_color": "#E7EE94", "font_name": "Calibri", "font_size": 11  # Yellow
+            "fg_color": "#E7EE94", "font_name": "Calibri", "font_size": 11,  # Yellow
+            "num_format": "#,##0.00"
         })
         variant_format_medium = workbook.add_format({
             "align": "left", "valign": "vcenter",
-            "fg_color": "#FFF2CC", "font_name": "Calibri", "font_size": 11
+            "fg_color": "#FFF2CC", "font_name": "Calibri", "font_size": 11,
+            "num_format": "#,##0.00"
         })
         
         product_total_format_high = workbook.add_format({
             "bold": True, "align": "left", "valign": "vcenter",
-            "fg_color": "#FFD966", "font_name": "Calibri", "font_size": 11  # Default
+            "fg_color": "#FFD966", "font_name": "Calibri", "font_size": 11,  # Default
+            "num_format": "#,##0.00"
         })
         variant_format_high = workbook.add_format({
             "align": "left", "valign": "vcenter",
-            "fg_color": "#D9E1F2", "font_name": "Calibri", "font_size": 11
+            "fg_color": "#D9E1F2", "font_name": "Calibri", "font_size": 11,
+            "num_format": "#,##0.00"
         })
 
-        # Define base columns for staff (added Break Even Point, kept Product Cost Input visible)
-        base_columns = ["Product title", "Product variant title", "Delivery Rate", "Product Cost (Input)", "Total Net items sold", "Amount Spent", "Cost Per Item", "Break Even Point"]
+        # Define base columns for staff (UPDATED: "Cost Per Item" to "C.P.I" and "Break Even Point" to "B.E")
+        base_columns = ["Product title", "Product variant title", "Delivery Rate", "Product Cost (Input)", "Total Net items sold", "Amount Spent", "C.P.I", "B.E"]
         
         # Define staff metrics (simplified - only 6 metrics per date)
         date_metrics = ["Net items sold", "Avg Price", "Ad Spend (USD)", "Delivery Rate", "Product Cost Input", "Score"]
@@ -1021,7 +1031,7 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
         
         # Set base column widths (all base columns are now visible)
         worksheet.set_column(0, 1, 25)  # Product title and variant title
-        worksheet.set_column(2, 7, 15)  # Delivery Rate, Product Cost Input, Total net items, amount spent, cost per item, break even point
+        worksheet.set_column(2, 7, 15)  # Delivery Rate, Product Cost Input, Total net items, amount spent, C.P.I, B.E
         worksheet.set_column(8, 8, 3)   # Separator column
 
         worksheet.outline_settings(
@@ -1092,11 +1102,11 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
                 safe_write(worksheet, variant_row_idx, 2, round(avg_delivery_rate, 2), variant_format)
                 safe_write(worksheet, variant_row_idx, 3, round(avg_product_cost, 2), variant_format)  # Now visible
                 
-                # Leave Total Net items sold, Amount Spent, Cost Per Item, and Break Even Point columns empty for variants (will be calculated via formulas)
+                # Leave Total Net items sold, Amount Spent, C.P.I, and B.E columns empty for variants (will be calculated via formulas)
                 safe_write(worksheet, variant_row_idx, 4, "", variant_format)
                 safe_write(worksheet, variant_row_idx, 5, "", variant_format)
-                safe_write(worksheet, variant_row_idx, 6, "", variant_format)
-                safe_write(worksheet, variant_row_idx, 7, "", variant_format)  # Break Even Point
+                safe_write(worksheet, variant_row_idx, 6, "", variant_format)  # C.P.I
+                safe_write(worksheet, variant_row_idx, 7, "", variant_format)  # B.E
                 
                 # Cell references for base columns
                 excel_row = variant_row_idx + 1
@@ -1303,15 +1313,15 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
                     variant_format
                 )
                 
-                # Calculate "Cost Per Item" for base column (Amount Spent / Net Items Sold)
+                # Calculate "C.P.I" for base column (Amount Spent / Net Items Sold) - UPDATED formula
                 worksheet.write_formula(
                     variant_row_idx, 6,
                     f"=ROUND(IF(E{excel_row}=0,0,F{excel_row}/E{excel_row}),2)",
                     variant_format
                 )
                 
-                # Calculate "Break Even Point" for base column (Cost per item at break-even)
-                # Break Even Point = (Zero Score Amount Spent) ÷ Net Items Sold
+                # Calculate "B.E" for base column (Cost per item at break-even) - UPDATED formula
+                # B.E = (Zero Score Amount Spent) ÷ Net Items Sold
                 total_avg_price_col_idx = all_columns.index("Total_Avg Price")
                 total_delivery_rate_col_idx = all_columns.index("Total_Delivery Rate")
                 total_product_cost_col_idx = all_columns.index("Total_Product Cost Input")
@@ -1321,7 +1331,7 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
                 total_delivery_rate_ref = f"{xl_col_to_name(total_delivery_rate_col_idx)}{excel_row}"
                 total_product_cost_ref = f"{xl_col_to_name(total_product_cost_col_idx)}{excel_row}"
                 
-                # BREAK EVEN POINT FORMULA: (Zero Score Amount Spent) ÷ Net Items Sold = Cost per item at break-even
+                # B.E FORMULA: (Zero Score Amount Spent) ÷ Net Items Sold = Cost per item at break-even
                 break_even_formula = f'''=IF(AND({total_avg_price_ref}>0,{total_net_items_ref}>0),
                     ((({total_avg_price_ref}*{total_net_items_ref}*IF(ISNUMBER({total_delivery_rate_ref}),IF({total_delivery_rate_ref}>1,{total_delivery_rate_ref}/100,{total_delivery_rate_ref}),0))
                     -(77*{total_net_items_ref})-(65*{total_net_items_ref})
@@ -1448,8 +1458,8 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
                 base_product_cost_col = 3  # Now visible
                 base_total_net_items_col = 4
                 base_amount_spent_col = 5
-                base_cost_per_item_col = 6
-                base_break_even_point_col = 7
+                base_cost_per_item_col = 6  # C.P.I
+                base_break_even_point_col = 7  # B.E
                 total_delivery_rate_col_idx = all_columns.index("Total_Delivery Rate")
                 total_product_cost_col_idx = all_columns.index("Total_Product Cost Input")
                 total_net_items_col_idx = all_columns.index("Total_Net items sold")
@@ -1479,7 +1489,7 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
                     product_total_format
                 )
                 
-                # Calculate "Cost Per Item" for product total (Amount Spent / Net Items Sold)
+                # Calculate "C.P.I" for product total (Amount Spent / Net Items Sold) - UPDATED
                 product_excel_row = product_total_row_idx + 1
                 worksheet.write_formula(
                     product_total_row_idx, base_cost_per_item_col,
@@ -1487,7 +1497,7 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
                     product_total_format
                 )
                 
-                # Calculate "Break Even Point" for product total
+                # Calculate "B.E" for product total - UPDATED
                 total_avg_price_col_idx = all_columns.index("Total_Avg Price")
                 total_delivery_rate_col_idx = all_columns.index("Total_Delivery Rate")
                 total_product_cost_col_idx = all_columns.index("Total_Product Cost Input")
@@ -1515,8 +1525,8 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
             base_product_cost_col = 3  # Now visible
             base_total_net_items_col = 4
             base_amount_spent_col = 5
-            base_cost_per_item_col = 6
-            base_break_even_point_col = 7
+            base_cost_per_item_col = 6  # C.P.I
+            base_break_even_point_col = 7  # B.E
             total_delivery_rate_col_idx = all_columns.index("Total_Delivery Rate")
             total_product_cost_col_idx = all_columns.index("Total_Product Cost Input")
             total_net_items_col_idx = all_columns.index("Total_Net items sold")
@@ -1546,7 +1556,7 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
                 grand_total_format
             )
             
-            # Calculate "Cost Per Item" for grand total (Amount Spent / Net Items Sold)
+            # Calculate "C.P.I" for grand total (Amount Spent / Net Items Sold) - UPDATED
             grand_excel_row = grand_total_row_idx + 1
             worksheet.write_formula(
                 grand_total_row_idx, base_cost_per_item_col,
@@ -1554,7 +1564,7 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
                 grand_total_format
             )
             
-            # Calculate "Break Even Point" for grand total
+            # Calculate "B.E" for grand total - UPDATED
             total_avg_price_col_idx = all_columns.index("Total_Avg Price")
             total_delivery_rate_col_idx = all_columns.index("Total_Delivery Rate")
             total_product_cost_col_idx = all_columns.index("Total_Product Cost Input")
@@ -1714,7 +1724,6 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
         worksheet.freeze_panes(2, len(base_columns))
     
     return output.getvalue()
-
 
 def convert_final_campaign_to_excel_staff_simple(df):
     """Simple Campaign Excel conversion for staff without dates"""
@@ -1891,30 +1900,45 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
         worksheet = workbook.add_worksheet("Campaign Staff")
         writer.sheets["Campaign Staff"] = worksheet
 
-        # Staff-specific formats
+        # Staff-specific formats (with two decimal places)
         header_format = workbook.add_format({
             "bold": True, "align": "center", "valign": "vcenter",
-            "fg_color": "#BDD7EE", "font_name": "Calibri", "font_size": 11
+            "fg_color": "#BDD7EE", "font_name": "Calibri", "font_size": 11,
+            "num_format": "#,##0.00"
         })
         date_header_format = workbook.add_format({
             "bold": True, "align": "center", "valign": "vcenter",
-            "fg_color": "#B4C6E7", "font_name": "Calibri", "font_size": 11
+            "fg_color": "#B4C6E7", "font_name": "Calibri", "font_size": 11,
+            "num_format": "#,##0.00"
         })
         total_header_format = workbook.add_format({
             "bold": True, "align": "center", "valign": "vcenter",
-            "fg_color": "#FFD966", "font_name": "Calibri", "font_size": 11
+            "fg_color": "#FFD966", "font_name": "Calibri", "font_size": 11,
+            "num_format": "#,##0.00"
         })
         grand_total_format = workbook.add_format({
             "bold": True, "align": "left", "valign": "vcenter",
-            "fg_color": "#EEEE0E", "font_name": "Calibri", "font_size": 11
+            "fg_color": "#EEEE0E", "font_name": "Calibri", "font_size": 11,
+            "num_format": "#,##0.00"
         })
         product_total_format = workbook.add_format({
             "bold": True, "align": "left", "valign": "vcenter",
-            "fg_color": "#E7EE94", "font_name": "Calibri", "font_size": 11
+            "fg_color": "#E7EE94", "font_name": "Calibri", "font_size": 11,
+            "num_format": "#,##0.00"
         })
         campaign_format = workbook.add_format({
             "align": "left", "valign": "vcenter",
-            "font_name": "Calibri", "font_size": 11
+            "font_name": "Calibri", "font_size": 11,
+            "num_format": "#,##0.00"
+        })
+        # New remark format with different background color
+        remark_header_format = workbook.add_format({
+            "bold": True, "align": "center", "valign": "vcenter",
+            "fg_color": "#FFC0CB", "font_name": "Calibri", "font_size": 11  # Light pink background
+        })
+        remark_format = workbook.add_format({
+            "align": "left", "valign": "vcenter",
+            "fg_color": "#FFC0CB", "font_name": "Calibri", "font_size": 11  # Light pink background
         })
 
         # Check if we have dates
@@ -1926,11 +1950,12 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
         # Get unique dates and sort them
         unique_dates = sorted([str(d) for d in df['Date'].unique() if pd.notna(d) and str(d).strip() != ''])
         
-        # Define base columns for staff (CHANGED: "Amount Spent (Zero Score)" to "Break Even Point")
-        base_columns = ["Product Name", "Campaign Name", "Total Amount Spent (USD)", "Purchases", "Cost Per Purchase", "Break Even Point"]
+        # Define base columns for staff (CHANGED: "Cost Per Purchase" to "C.P.P" and "Break Even Point" to "B.E")
+        base_columns = ["Product Name", "Campaign Name", "Total Amount Spent (USD)", "Purchases", "C.P.P", "B.E"]
         
         # Define staff metrics (simplified - only 6 metrics per date for campaigns)
-        date_metrics = ["Amount Spent (USD)", "Purchases", "Cost Per Purchase (USD)", "Avg Price", "Delivery Rate", "Score"]
+        # CHANGED: "Cost Per Purchase (USD)" to "C.P.P (USD)"
+        date_metrics = ["Amount Spent (USD)", "Purchases", "C.P.P (USD)", "Avg Price", "Delivery Rate", "Score"]
         
         # Build column structure WITH SEPARATOR COLUMNS
         all_columns = base_columns.copy()
@@ -1945,6 +1970,9 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
         # Add total columns
         for metric in date_metrics:
             all_columns.append(f"Total_{metric}")
+        
+        # Add Remark column at the end
+        all_columns.append("Remark")
 
         # Track campaigns for unmatched sheet analysis
         matched_campaigns = []
@@ -1954,6 +1982,8 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
         for col_num, col_name in enumerate(all_columns):
             if col_name.startswith("SEPARATOR_"):
                 continue
+            elif col_name == "Remark":
+                safe_write(worksheet, 0, col_num, col_name, remark_header_format)
             elif col_name.startswith("Total_"):
                 safe_write(worksheet, 0, col_num, col_name.replace("_", " "), total_header_format)
             elif "_" in col_name and col_name.split("_")[0] in unique_dates:
@@ -1995,9 +2025,17 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
         worksheet.set_column(1, 1, 30)  # Campaign Name
         worksheet.set_column(2, 2, 20)  # Total Amount Spent (USD)
         worksheet.set_column(3, 3, 15)  # Purchases
-        worksheet.set_column(4, 4, 18)  # Cost Per Purchase
-        worksheet.set_column(5, 5, 22)  # Break Even Point
+        worksheet.set_column(4, 4, 18)  # C.P.P
+        worksheet.set_column(5, 5, 22)  # B.E
         worksheet.set_column(6, 6, 3)   # Separator column
+        
+        # Set width for Remark column (find its index and set width)
+        remark_col_idx = all_columns.index("Remark")
+        worksheet.set_column(remark_col_idx, remark_col_idx, 35)  # Remark column
+        
+        # Set width for Remark column (find its index and set width)
+        remark_col_idx = all_columns.index("Remark")
+        worksheet.set_column(remark_col_idx, remark_col_idx, 35)  # Remark column
 
         # Configure outline settings
         worksheet.outline_settings(
@@ -2010,6 +2048,14 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
         grand_total_row_idx = 1
         safe_write(worksheet, grand_total_row_idx, 0, "ALL PRODUCTS", grand_total_format)
         safe_write(worksheet, grand_total_row_idx, 1, "GRAND TOTAL", grand_total_format)
+        
+        # Add empty remark for grand total
+        remark_col_idx = all_columns.index("Remark")
+        safe_write(worksheet, grand_total_row_idx, remark_col_idx, "", remark_format)
+        
+        # Add empty remark for grand total
+        remark_col_idx = all_columns.index("Remark")
+        safe_write(worksheet, grand_total_row_idx, remark_col_idx, "", remark_format)
 
         row = grand_total_row_idx + 1
         product_total_rows = []
@@ -2038,29 +2084,60 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
             # Add totals for product header only
             safe_write(worksheet, product_total_row_idx, 2, round(total_amount_spent_for_product, 2), product_total_format)
             safe_write(worksheet, product_total_row_idx, 3, total_purchases_for_product, product_total_format)
-
-            # Group campaigns within product
-            campaign_rows = []
-            row += 1
             
+            # Add remark for products with zero total amount spent
+            remark_col_idx = all_columns.index("Remark")
+            if total_amount_spent_for_product == 0:
+                safe_write(worksheet, product_total_row_idx, remark_col_idx, "Issue with this campaign data - zero spending", remark_format)
+            else:
+                safe_write(worksheet, product_total_row_idx, remark_col_idx, "", remark_format)
+            
+            # Add remark for products with zero total amount spent
+            remark_col_idx = all_columns.index("Remark")
+            if total_amount_spent_for_product == 0:
+                safe_write(worksheet, product_total_row_idx, remark_col_idx, "Issue with this campaign data - zero spending", remark_format)
+            else:
+                safe_write(worksheet, product_total_row_idx, remark_col_idx, "", remark_format)
+
+            # NEW: Pre-calculate cost per purchase for each campaign to enable sorting
+            campaign_cpp_list = []
             for campaign_name, campaign_group in product_df.groupby("Campaign Name"):
-                # Track this campaign for unmatched analysis
                 total_amount_spent_usd = campaign_group.get("Amount Spent (USD)", 0).sum() if "Amount Spent (USD)" in campaign_group.columns else 0
                 total_purchases = campaign_group.get("Purchases", 0).sum() if "Purchases" in campaign_group.columns else 0
+                
+                # Calculate cost per purchase for sorting
+                cost_per_purchase = 0
+                if total_purchases > 0:
+                    cost_per_purchase = total_amount_spent_usd / total_purchases
                 
                 campaign_info = {
                     'Product': str(product) if pd.notna(product) else '',
                     'Campaign Name': str(campaign_name) if pd.notna(campaign_name) else '',
                     'Amount Spent (USD)': round(float(total_amount_spent_usd), 2) if pd.notna(total_amount_spent_usd) else 0.0,
                     'Purchases': int(total_purchases) if pd.notna(total_purchases) else 0,
+                    'Cost Per Purchase': cost_per_purchase,
                     'Has Shopify Data': has_shopify_data,
-                    'Dates': sorted([str(d) for d in campaign_group['Date'].unique() if pd.notna(d)])
+                    'Dates': sorted([str(d) for d in campaign_group['Date'].unique() if pd.notna(d)]),
+                    'Campaign Group': campaign_group  # Store the data group for processing
                 }
+                
+                campaign_cpp_list.append(campaign_info)
                 
                 if has_shopify_data:
                     matched_campaigns.append(campaign_info)
                 else:
                     unmatched_campaigns.append(campaign_info)
+            
+            # NEW: Sort campaigns by cost per purchase in ascending order
+            campaign_cpp_list.sort(key=lambda x: x['Cost Per Purchase'])
+
+            # Group campaigns within product (now sorted by cost per purchase)
+            campaign_rows = []
+            row += 1
+            
+            for campaign_info in campaign_cpp_list:
+                campaign_name = campaign_info['Campaign Name']
+                campaign_group = campaign_info['Campaign Group']
                 
                 campaign_row_idx = row
                 campaign_rows.append(campaign_row_idx)
@@ -2075,6 +2152,14 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
                 safe_write(worksheet, campaign_row_idx, 4, "", campaign_format)
                 safe_write(worksheet, campaign_row_idx, 5, "", campaign_format)
                 
+                # Add remark for campaigns (empty for individual campaigns)
+                remark_col_idx = all_columns.index("Remark")
+                safe_write(worksheet, campaign_row_idx, remark_col_idx, "", remark_format)
+                
+                # Add remark for campaigns (empty for individual campaigns)
+                remark_col_idx = all_columns.index("Remark")
+                safe_write(worksheet, campaign_row_idx, remark_col_idx, "", remark_format)
+                
                 # Cell references for Excel formulas
                 excel_row = campaign_row_idx + 1
                 
@@ -2082,10 +2167,10 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
                 for date in unique_dates:
                     date_data = campaign_group[campaign_group['Date'].astype(str) == date]
                     
-                    # Get column indices for this date
+                    # Get column indices for this date (UPDATED: using "C.P.P (USD)")
                     amount_spent_col_idx = all_columns.index(f"{date}_Amount Spent (USD)")
                     purchases_col_idx = all_columns.index(f"{date}_Purchases")
-                    cost_per_purchase_col_idx = all_columns.index(f"{date}_Cost Per Purchase (USD)")
+                    cost_per_purchase_col_idx = all_columns.index(f"{date}_C.P.P (USD)")
                     avg_price_col_idx = all_columns.index(f"{date}_Avg Price")
                     delivery_rate_col_idx = all_columns.index(f"{date}_Delivery Rate")
                     score_col_idx = all_columns.index(f"{date}_Score")
@@ -2124,7 +2209,7 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
                     
                     # FORMULAS for calculated fields
                     
-                    # Cost Per Purchase (USD) = Amount Spent (USD) / Purchases
+                    # C.P.P (USD) = Amount Spent (USD) / Purchases
                     worksheet.write_formula(
                         campaign_row_idx, cost_per_purchase_col_idx,
                         f"=IF({purchases_ref}=0,0,{amount_spent_ref}/{purchases_ref})",
@@ -2179,7 +2264,7 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
                                 campaign_format
                             )
                     
-                    elif metric == "Cost Per Purchase (USD)":
+                    elif metric == "C.P.P (USD)":  # UPDATED: changed from "Cost Per Purchase (USD)"
                         # CALCULATED: Total Amount Spent / Total Purchases
                         total_amount_spent_col_idx = all_columns.index("Total_Amount Spent (USD)")
                         total_purchases_col_idx = all_columns.index("Total_Purchases")
@@ -2251,7 +2336,7 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
                 # Calculate base columns for campaign (link to total columns)
                 total_amount_spent_col_idx = all_columns.index("Total_Amount Spent (USD)")
                 total_purchases_col_idx = all_columns.index("Total_Purchases")
-                total_cost_per_purchase_col_idx = all_columns.index("Total_Cost Per Purchase (USD)")
+                total_cost_per_purchase_col_idx = all_columns.index("Total_C.P.P (USD)")  # UPDATED
                 
                 worksheet.write_formula(
                     campaign_row_idx, 2,
@@ -2271,8 +2356,8 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
                     campaign_format
                 )
                 
-                # NEW "Break Even Point" FORMULA - Cost per item at zero score
-                # Break Even Point = (Zero Score Amount Spent) / Purchases
+                # NEW "B.E" FORMULA - Cost per item at zero score
+                # B.E = (Zero Score Amount Spent) / Purchases
                 
                 total_avg_price_col_idx = all_columns.index("Total_Avg Price")
                 total_delivery_rate_col_idx = all_columns.index("Total_Delivery Rate")
@@ -2289,7 +2374,7 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
                         product_costs.append(date_cost)
                 avg_product_cost = sum(product_costs) / len(product_costs) if product_costs else 0
                 
-                # BREAK EVEN POINT FORMULA: Zero Score Amount Spent ÷ Purchases
+                # B.E FORMULA: Zero Score Amount Spent ÷ Purchases
                 # First calculate the zero score amount spent, then divide by purchases
                 break_even_formula = f'''=IF(AND({total_avg_price_ref}>0,{total_purchases_ref}>0),
                     (({total_avg_price_ref}*{total_purchases_ref}*IF(ISNUMBER({total_delivery_rate_ref}),IF({total_delivery_rate_ref}>1,{total_delivery_rate_ref}/100,{total_delivery_rate_ref}),0))
@@ -2326,7 +2411,7 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
                                 f"=IF(SUM({purchases_range})=0,0,SUMPRODUCT({metric_range},{purchases_range})/SUM({purchases_range}))",
                                 product_total_format
                             )
-                        elif metric == "Cost Per Purchase (USD)":
+                        elif metric == "C.P.P (USD)":  # UPDATED: changed from "Cost Per Purchase (USD)"
                             # Calculate based on totals for this date
                             amount_spent_idx = all_columns.index(f"{date}_Amount Spent (USD)")
                             purchases_idx = all_columns.index(f"{date}_Purchases")
@@ -2388,7 +2473,7 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
                             f"=IF(SUM({purchases_range})=0,0,SUMPRODUCT({metric_range},{purchases_range})/SUM({purchases_range}))",
                             product_total_format
                         )
-                    elif metric == "Cost Per Purchase (USD)":
+                    elif metric == "C.P.P (USD)":  # UPDATED: changed from "Cost Per Purchase (USD)"
                         # Calculate based on totals
                         total_amount_spent_idx = all_columns.index("Total_Amount Spent (USD)")
                         total_purchases_idx = all_columns.index("Total_Purchases")
@@ -2442,7 +2527,7 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
                 # Calculate base columns for product total (link to total columns)
                 total_amount_spent_col_idx = all_columns.index("Total_Amount Spent (USD)")
                 total_purchases_col_idx = all_columns.index("Total_Purchases")
-                total_cost_per_purchase_col_idx = all_columns.index("Total_Cost Per Purchase (USD)")
+                total_cost_per_purchase_col_idx = all_columns.index("Total_C.P.P (USD)")  # UPDATED
                 
                 worksheet.write_formula(
                     product_total_row_idx, 2,
@@ -2462,7 +2547,7 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
                     product_total_format
                 )
                 
-                # "Break Even Point" for product total
+                # "B.E" for product total
                 total_avg_price_col_idx = all_columns.index("Total_Avg Price")
                 total_delivery_rate_col_idx = all_columns.index("Total_Delivery Rate")
                 
@@ -2494,7 +2579,7 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
             # Add base columns to grand total
             total_amount_spent_col_idx = all_columns.index("Total_Amount Spent (USD)")
             total_purchases_col_idx = all_columns.index("Total_Purchases")
-            total_cost_per_purchase_col_idx = all_columns.index("Total_Cost Per Purchase (USD)")
+            total_cost_per_purchase_col_idx = all_columns.index("Total_C.P.P (USD)")  # UPDATED
             
             worksheet.write_formula(
                 grand_total_row_idx, 2,
@@ -2514,7 +2599,7 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
                 grand_total_format
             )
             
-            # "Break Even Point" for grand total
+            # "B.E" for grand total
             total_avg_price_col_idx = all_columns.index("Total_Avg Price")
             total_delivery_rate_col_idx = all_columns.index("Total_Delivery Rate")
             
@@ -2571,7 +2656,7 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
                             f"=IF(({sum_purchases_formula})=0,0,({sumproduct_formula})/({sum_purchases_formula}))",
                             grand_total_format
                         )
-                    elif metric == "Cost Per Purchase (USD)":
+                    elif metric == "C.P.P (USD)":  # UPDATED: changed from "Cost Per Purchase (USD)"
                         # Calculate based on totals for this date
                         amount_spent_idx = all_columns.index(f"{date}_Amount Spent (USD)")
                         purchases_idx = all_columns.index(f"{date}_Purchases")
@@ -2656,7 +2741,7 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
                         f"=IF(({sum_purchases_formula})=0,0,({sumproduct_formula})/({sum_purchases_formula}))",
                         grand_total_format
                     )
-                elif metric == "Cost Per Purchase (USD)":
+                elif metric == "C.P.P (USD)":  # UPDATED: changed from "Cost Per Purchase (USD)"
                     # Calculate based on totals
                     total_amount_spent_idx = all_columns.index("Total_Amount Spent (USD)")
                     total_purchases_idx = all_columns.index("Total_Purchases")
@@ -2724,9 +2809,9 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
             "num_format": "#,##0.00"
         })
         
-        # Headers for unmatched sheet
+        # Headers for unmatched sheet (UPDATED: changed "Cost Per Purchase (USD)" to "C.P.P (USD)")
         unmatched_headers = ["Status", "Product", "Campaign Name", "Amount Spent (USD)", 
-                           "Purchases", "Cost Per Purchase (USD)", "Dates Covered", "Reason"]
+                           "Purchases", "C.P.P (USD)", "Dates Covered", "Reason"]
         
         for col_num, header in enumerate(unmatched_headers):
             safe_write(unmatched_sheet, 0, col_num, header, unmatched_header_format)
@@ -2795,15 +2880,11 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
         unmatched_sheet.set_column(2, 2, 35)  # Campaign Name
         unmatched_sheet.set_column(3, 3, 18)  # Amount USD
         unmatched_sheet.set_column(4, 4, 12)  # Purchases
-        unmatched_sheet.set_column(5, 5, 20)  # Cost Per Purchase USD
+        unmatched_sheet.set_column(5, 5, 20)  # C.P.P USD
         unmatched_sheet.set_column(6, 6, 25)  # Dates Covered
         unmatched_sheet.set_column(7, 7, 40)  # Reason
         
     return output.getvalue()
-
-
-# ---- DOWNLOAD SECTIONS ----
-
 
 
 st.header("📥 Download Processed Files")
@@ -2883,9 +2964,7 @@ if campaign_files or shopify_files or old_merged_files:
         
         
     
+        
 
-        
-        
-        
 
 
