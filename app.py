@@ -930,7 +930,6 @@ def convert_shopify_to_excel_staff_simple(df):
 
 
 
-
 def convert_shopify_to_excel_staff_with_date_columns_corrected(df, campaign_df=None):
     """Convert Shopify data to Excel for staff with date columns and CORRECTED ad spend distribution"""
     if df is None or df.empty:
@@ -1359,24 +1358,12 @@ def convert_shopify_to_excel_staff_with_date_columns_corrected(df, campaign_df=N
                     variant_format
                 )
                 
-                # Calculate "B.E" for base column (Cost per item at break-even)
-                total_avg_price_col_idx = all_columns.index("Total_Avg Price")
-                total_delivery_rate_col_idx = all_columns.index("Total_Delivery Rate")
-                total_product_cost_col_idx = all_columns.index("Total_Product Cost Input")
-                
-                total_avg_price_ref = f"{xl_col_to_name(total_avg_price_col_idx)}{excel_row}"
-                total_net_items_ref = f"{xl_col_to_name(total_net_items_col_idx)}{excel_row}"
-                total_delivery_rate_ref = f"{xl_col_to_name(total_delivery_rate_col_idx)}{excel_row}"
-                total_product_cost_ref = f"{xl_col_to_name(total_product_cost_col_idx)}{excel_row}"
-                
-                break_even_formula = f'''=IF(AND({total_avg_price_ref}>0,{total_net_items_ref}>0),
-                    ((({total_avg_price_ref}*{total_net_items_ref}*IF(ISNUMBER({total_delivery_rate_ref}),IF({total_delivery_rate_ref}>1,{total_delivery_rate_ref}/100,{total_delivery_rate_ref}),0))
-                    -(77*{total_net_items_ref})-(65*{total_net_items_ref})
-                    -({total_product_cost_ref}*{total_net_items_ref}*IF(ISNUMBER({total_delivery_rate_ref}),IF({total_delivery_rate_ref}>1,{total_delivery_rate_ref}/100,{total_delivery_rate_ref}),0)))/100)/{total_net_items_ref},0)'''
-                
+                # MODIFIED: B.E (Break Even) - Reference the PRODUCT TOTAL B.E value for all variants
+                # This ensures all variants within a product have the same B.E value calculated at product level
+                product_total_excel_row = product_total_row_idx + 1
                 worksheet.write_formula(
                     variant_row_idx, 7,
-                    break_even_formula,
+                    f"=${xl_col_to_name(7)}${product_total_excel_row}",  # Absolute reference to product total B.E
                     variant_format
                 )
                 
@@ -1534,6 +1521,7 @@ def convert_shopify_to_excel_staff_with_date_columns_corrected(df, campaign_df=N
                     product_total_format
                 )
                 
+                # B.E (Break Even) for product total - CALCULATE ONCE FOR PRODUCT
                 total_avg_price_col_idx = all_columns.index("Total_Avg Price")
                 total_delivery_rate_col_idx = all_columns.index("Total_Delivery Rate")
                 total_product_cost_col_idx = all_columns.index("Total_Product Cost Input")
@@ -1600,6 +1588,7 @@ def convert_shopify_to_excel_staff_with_date_columns_corrected(df, campaign_df=N
                 grand_total_format
             )
             
+            # B.E (Break Even) for grand total - CALCULATE ONCE FOR GRAND TOTAL
             total_avg_price_col_idx = all_columns.index("Total_Avg Price")
             total_delivery_rate_col_idx = all_columns.index("Total_Delivery Rate")
             total_product_cost_col_idx = all_columns.index("Total_Product Cost Input")
@@ -1762,6 +1751,7 @@ def convert_shopify_to_excel_staff_with_date_columns_corrected(df, campaign_df=N
 
 
 
+
 def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df=None):
     """Convert Campaign data to Excel for staff with day-wise lookups and scoring focus"""
     if df.empty:
@@ -1907,10 +1897,6 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
         # Set width for Remark column (find its index and set width)
         remark_col_idx = all_columns.index("Remark")
         worksheet.set_column(remark_col_idx, remark_col_idx, 35)  # Remark column
-        
-        # Set width for Remark column (find its index and set width)
-        remark_col_idx = all_columns.index("Remark")
-        worksheet.set_column(remark_col_idx, remark_col_idx, 35)  # Remark column
 
         # Configure outline settings
         worksheet.outline_settings(
@@ -1923,10 +1909,6 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
         grand_total_row_idx = 1
         safe_write(worksheet, grand_total_row_idx, 0, "ALL PRODUCTS", grand_total_format)
         safe_write(worksheet, grand_total_row_idx, 1, "GRAND TOTAL", grand_total_format)
-        
-        # Add empty remark for grand total
-        remark_col_idx = all_columns.index("Remark")
-        safe_write(worksheet, grand_total_row_idx, remark_col_idx, "", remark_format)
         
         # Add empty remark for grand total
         remark_col_idx = all_columns.index("Remark")
@@ -1959,13 +1941,6 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
             # Add totals for product header only
             safe_write(worksheet, product_total_row_idx, 2, round(total_amount_spent_for_product, 2), product_total_format)
             safe_write(worksheet, product_total_row_idx, 3, total_purchases_for_product, product_total_format)
-            
-            # Add remark for products with zero total amount spent
-            remark_col_idx = all_columns.index("Remark")
-            if total_amount_spent_for_product == 0:
-                safe_write(worksheet, product_total_row_idx, remark_col_idx, "Issue with this campaign data - zero spending", remark_format)
-            else:
-                safe_write(worksheet, product_total_row_idx, remark_col_idx, "", remark_format)
             
             # Add remark for products with zero total amount spent
             remark_col_idx = all_columns.index("Remark")
@@ -2026,10 +2001,6 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
                 safe_write(worksheet, campaign_row_idx, 3, "", campaign_format)
                 safe_write(worksheet, campaign_row_idx, 4, "", campaign_format)
                 safe_write(worksheet, campaign_row_idx, 5, "", campaign_format)
-                
-                # Add remark for campaigns (empty for individual campaigns)
-                remark_col_idx = all_columns.index("Remark")
-                safe_write(worksheet, campaign_row_idx, remark_col_idx, "", remark_format)
                 
                 # Add remark for campaigns (empty for individual campaigns)
                 remark_col_idx = all_columns.index("Remark")
@@ -2231,34 +2202,12 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
                     campaign_format
                 )
                 
-                # NEW "B.E" FORMULA - Cost per item at zero score
-                # B.E = (Zero Score Amount Spent) / Purchases
-                
-                total_avg_price_col_idx = all_columns.index("Total_Avg Price")
-                total_delivery_rate_col_idx = all_columns.index("Total_Delivery Rate")
-                
-                total_avg_price_ref = f"{xl_col_to_name(total_avg_price_col_idx)}{excel_row}"
-                total_purchases_ref = f"{xl_col_to_name(total_purchases_col_idx)}{excel_row}"
-                total_delivery_rate_ref = f"{xl_col_to_name(total_delivery_rate_col_idx)}{excel_row}"
-                
-                # Get average product cost for this product across all dates
-                product_costs = []
-                for date in unique_dates:
-                    date_cost = product_date_cost_inputs.get(product, {}).get(date, 0)
-                    if date_cost > 0:
-                        product_costs.append(date_cost)
-                avg_product_cost = sum(product_costs) / len(product_costs) if product_costs else 0
-                
-                # B.E FORMULA: Zero Score Amount Spent ÷ Purchases
-                # First calculate the zero score amount spent, then divide by purchases
-                break_even_formula = f'''=IF(AND({total_avg_price_ref}>0,{total_purchases_ref}>0),
-                    (({total_avg_price_ref}*{total_purchases_ref}*IF(ISNUMBER({total_delivery_rate_ref}),IF({total_delivery_rate_ref}>1,{total_delivery_rate_ref}/100,{total_delivery_rate_ref}),0))
-                    -(77*{total_purchases_ref})-(65*{total_purchases_ref})
-                    -({avg_product_cost}*{total_purchases_ref}*IF(ISNUMBER({total_delivery_rate_ref}),IF({total_delivery_rate_ref}>1,{total_delivery_rate_ref}/100,{total_delivery_rate_ref}),0)))/100/{total_purchases_ref},0)'''
-                
+                # MODIFIED: B.E (Break Even) - Reference the PRODUCT TOTAL B.E value for all campaigns
+                # This ensures all campaigns within a product have the same B.E value calculated at product level
+                product_total_excel_row = product_total_row_idx + 1
                 worksheet.write_formula(
                     campaign_row_idx, 5,
-                    break_even_formula,
+                    f"=${xl_col_to_name(5)}${product_total_excel_row}",  # Absolute reference to product total B.E
                     campaign_format
                 )
                 
@@ -2422,7 +2371,7 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
                     product_total_format
                 )
                 
-                # "B.E" for product total
+                # B.E (Break Even) for product total - CALCULATE ONCE FOR PRODUCT
                 total_avg_price_col_idx = all_columns.index("Total_Avg Price")
                 total_delivery_rate_col_idx = all_columns.index("Total_Delivery Rate")
                 
@@ -2474,7 +2423,7 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
                 grand_total_format
             )
             
-            # "B.E" for grand total
+            # B.E (Break Even) for grand total - CALCULATE ONCE FOR GRAND TOTAL
             total_avg_price_col_idx = all_columns.index("Total_Avg Price")
             total_delivery_rate_col_idx = all_columns.index("Total_Delivery Rate")
             
@@ -2762,8 +2711,6 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
     return output.getvalue()
 
 
-
-
 st.header("📥 Download Processed Files")
 
 # ---- SHOPIFY DOWNLOAD ----
@@ -2841,7 +2788,9 @@ if campaign_files or shopify_files or old_merged_files:
         
         
     
+    
         
+
 
 
 
