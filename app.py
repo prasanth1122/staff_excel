@@ -297,6 +297,11 @@ def merge_reference_files(files):
 df_campaign, df_shopify, df_old_merged = None, None, None
 grouped_campaign = None
 
+# Initialize day-wise lookup dictionaries
+product_date_avg_prices = {}
+product_date_delivery_rates = {}
+product_date_cost_inputs = {}
+
 # ---- PROCESS MULTIPLE REFERENCE FILES ----
 if old_merged_files:
     df_old_merged = merge_reference_files(old_merged_files)
@@ -492,21 +497,142 @@ if shopify_files:
             lambda x: fuzzy_match_to_campaign(x, campaign_products)
         )
 
-        # ---- ALLOCATE AD SPEND (considering dates if available) ----
-        if grouped_campaign is not None:
-            ad_spend_map = dict(zip(grouped_campaign["Product"], grouped_campaign["Total Amount Spent (INR)"]))
+        # ---- CORRECTED AD SPEND ALLOCATION (DAY-WISE DISTRIBUTION) ----
+        if grouped_campaign is not None and df_campaign is not None:
+            # Create campaign spend lookup by product and date
+            campaign_spend_by_product_date = {}
             
-            has_shopify_dates = 'Date' in df_shopify.columns
-
-            for product, product_df in df_shopify.groupby("Canonical Product"):
-                total_items = product_df["Net items sold"].sum()
-                if total_items > 0 and product in ad_spend_map:
-                    total_spend_inr = ad_spend_map[product]
-                    total_spend_usd = total_spend_inr / 100  # Convert to USD for display
+            # First, build the campaign spend lookup from df_campaign (which has dates)
+            if 'Date' in df_campaign.columns:
+                for _, row in df_campaign.iterrows():
+                    product = row['Canonical Product']
+                    date = str(row['Date'])
+                    amount_usd = row['Amount spent (USD)']
                     
-                    # Allocate spend based on items sold
-                    ratio = product_df["Net items sold"] / total_items
-                    df_shopify.loc[product_df.index, "Ad Spend (USD)"] = total_spend_usd * ratio
+                    if product not in campaign_spend_by_product_date:
+                        campaign_spend_by_product_date[product] = {}
+                    
+                    if date not in campaign_spend_by_product_date[product]:
+                        campaign_spend_by_product_date[product][date] = 0
+                    
+                    campaign_spend_by_product_date[product][date] += amount_usd
+            
+            # Now allocate ad spend to Shopify variants based on their share of items sold per product per date
+            for product, product_df in df_shopify.groupby("Canonical Product"):
+                if product in campaign_spend_by_product_date:
+                    # For each date, calculate total items sold by this product on that date
+                    for date in campaign_spend_by_product_date[product].keys():
+                        date_campaign_spend = campaign_spend_by_product_date[product][date]
+                        
+                        # Get all variants of this product sold on this date
+                        product_date_variants = product_df[product_df['Date'].astype(str) == date]
+                        
+                        if not product_date_variants.empty:
+                            total_items_on_date = product_date_variants['Net items sold'].sum()
+                            
+                            if total_items_on_date > 0:
+                                # Distribute the campaign spend for this date proportionally
+                                for idx, variant_row in product_date_variants.iterrows():
+                                    variant_items = variant_row['Net items sold']
+                                    variant_share = variant_items / total_items_on_date
+                                    variant_ad_spend = date_campaign_spend * variant_share
+                                    
+                                    # Update the ad spend for this specific variant on this date
+                                    df_shopify.loc[idx, "Ad Spend (USD)"] = variant_ad_spend
+            
+            # For products without date-specific campaign data, fall back to total allocation
+            ad_spend_map = dict(zip(grouped_campaign["Product"], grouped_campaign["Total Amount Spent (USD)"]))
+            
+            for product, product_df in df_shopify.groupby("Canonical Product"):
+                # Only allocate total spend for variants that don't have date-specific allocation
+                variants_without_date_allocation = product_df[product_df["Ad Spend (USD)"] == 0]
+                
+                if not variants_without_date_allocation.empty and product in ad_spend_map:
+                    total_items = variants_without_date_allocation["Net items sold"].sum()
+                    if total_items > 0:
+                        total_spend_usd = ad_spend_map[product]
+                        
+                        # Allocate spend based on items sold
+                        ratio = variants_without_date_allocation["Net items sold"] / total_items
+                        df_shopify.loc[variants_without_date_allocation.index, "Ad Spend (USD)"] = total_spend_usd * ratio
+
+        # ---- CREATE DAY-WISE LOOKUPS FROM SHOPIFY DATA ----
+        if df_shopify is not None and not df_shopify.empty and 'Date' in df_shopify.columns:
+            st.subheader("🔍 Creating Day-wise Lookups from Shopify Data")
+            
+            # Get unique dates
+            unique_dates = sorted([str(d) for d in df_shopify['Date'].unique() if pd.notna(d) and str(d).strip() != ''])
+            
+            # Initialize lookups for all products and dates
+            for product in df_shopify['Canonical Product'].unique():
+                product_date_avg_prices[product] = {}
+                product_date_delivery_rates[product] = {}
+                product_date_cost_inputs[product] = {}
+                
+                for date in unique_dates:
+                    product_date_avg_prices[product][date] = 0
+                    product_date_delivery_rates[product][date] = 0
+                    product_date_cost_inputs[product][date] = 0
+            
+            # Build lookups from Shopify data
+            for product, product_df in df_shopify.groupby('Canonical Product'):
+                for date in unique_dates:
+                    # Filter data for this product and date
+                    date_data = product_df[product_df['Date'].astype(str) == date]
+                    
+                    if not date_data.empty:
+                        # Calculate weighted averages for this product-date combination
+                        total_net_items = date_data['Net items sold'].sum()
+                        
+                        if total_net_items > 0:
+                            # Weighted average price
+                            total_revenue = (date_data['Product variant price'] * date_data['Net items sold']).sum()
+                            avg_price = total_revenue / total_net_items
+                            product_date_avg_prices[product][date] = avg_price
+                            
+                            # Weighted average delivery rate
+                            delivery_rates = []
+                            cost_inputs = []
+                            
+                            for _, row in date_data.iterrows():
+                                net_items = row['Net items sold']
+                                delivery_rate = row.get('Delivery Rate', 0)
+                                cost_input = row.get('Product Cost (Input)', 0)
+                                
+                                # Convert delivery rate if it's a string percentage
+                                if isinstance(delivery_rate, str):
+                                    delivery_rate = delivery_rate.strip().replace('%', '')
+                                delivery_rate = pd.to_numeric(delivery_rate, errors='coerce') or 0
+                                if delivery_rate > 1:  # assume it's given as percentage
+                                    delivery_rate = delivery_rate / 100.0
+                                
+                                cost_input = pd.to_numeric(cost_input, errors='coerce') or 0
+                                
+                                if net_items > 0:
+                                    delivery_rates.extend([delivery_rate] * int(net_items))
+                                    cost_inputs.extend([cost_input] * int(net_items))
+                            
+                            # Calculate weighted averages
+                            if delivery_rates:
+                                product_date_delivery_rates[product][date] = sum(delivery_rates) / len(delivery_rates)
+                            
+                            if cost_inputs:
+                                product_date_cost_inputs[product][date] = sum(cost_inputs) / len(cost_inputs)
+            
+            # Display lookup summary
+            st.success("✅ Day-wise lookups created successfully!")
+            
+            # Show sample of lookups
+            sample_products = list(product_date_avg_prices.keys())[:3]  # Show first 3 products
+            for product in sample_products:
+                st.write(f"**{product}:**")
+                for date in unique_dates[:3]:  # Show first 3 dates
+                    avg_price = product_date_avg_prices[product].get(date, 0)
+                    delivery_rate = product_date_delivery_rates[product].get(date, 0)
+                    cost_input = product_date_cost_inputs[product].get(date, 0)
+                    
+                    if avg_price > 0 or delivery_rate > 0 or cost_input > 0:
+                        st.write(f"  • {date}: Price=${avg_price:.2f}, Rate={delivery_rate:.2%}, Cost=${cost_input:.2f}")
 
         # ---- SORT PRODUCTS BY NET ITEMS SOLD (DESC) ----
         product_order = (
@@ -525,7 +651,7 @@ if shopify_files:
             
         df_shopify = df_shopify.sort_values(by=sort_cols).reset_index(drop=True)
 
-        st.subheader("🛒 Merged Shopify Data with Ad Spend (USD) & Date Grouping")
+        st.subheader("🛒 Merged Shopify Data with CORRECTED Ad Spend (USD) & Date Grouping")
         
         # Show delivery rate and product cost import summary
         if df_old_merged is not None:
@@ -546,9 +672,16 @@ if shopify_files:
             unique_dates = [str(d) for d in unique_dates if pd.notna(d) and str(d).strip() != '']
             st.info(f"📅 Found {len(unique_dates)} unique dates in Shopify data: {', '.join(sorted(unique_dates)[:5])}{'...' if len(unique_dates) > 5 else ''}")
         
+        # Show ad spend verification
+        total_shopify_ad_spend = df_shopify["Ad Spend (USD)"].sum()
+        total_campaign_spend = grouped_campaign["Total Amount Spent (USD)"].sum() if grouped_campaign is not None else 0
+        st.info(f"💰 Ad Spend Verification: Shopify Total = ${total_shopify_ad_spend:.2f}, Campaign Total = ${total_campaign_spend:.2f}")
+        
         # Display without internal columns
         display_cols = [col for col in df_shopify.columns if col not in ["Product Name", "Canonical Product"]]
         st.write(df_shopify[display_cols])
+
+
 
 # ---- BUILD SHOPIFY TOTALS LOOKUP ----
 shopify_totals = {}
@@ -604,90 +737,6 @@ if df_shopify is not None and not df_shopify.empty:
                 / valid_df["Net items sold"].sum()
             )
             avg_product_cost_lookup[product] = weighted_avg_cost
-
-
-product_date_avg_prices = {}
-product_date_delivery_rates = {}
-product_date_cost_inputs = {}
-
-if df_shopify is not None and not df_shopify.empty and 'Date' in df_shopify.columns:
-    st.subheader("🔍 Creating Day-wise Lookups from Shopify Data")
-    
-    # Get unique dates
-    unique_dates = sorted([str(d) for d in df_shopify['Date'].unique() if pd.notna(d) and str(d).strip() != ''])
-    
-    # Initialize lookups for all products and dates
-    for product in df_shopify['Canonical Product'].unique():
-        product_date_avg_prices[product] = {}
-        product_date_delivery_rates[product] = {}
-        product_date_cost_inputs[product] = {}
-        
-        for date in unique_dates:
-            product_date_avg_prices[product][date] = 0
-            product_date_delivery_rates[product][date] = 0
-            product_date_cost_inputs[product][date] = 0
-    
-    # Build lookups from Shopify data
-    for product, product_df in df_shopify.groupby('Canonical Product'):
-        for date in unique_dates:
-            # Filter data for this product and date
-            date_data = product_df[product_df['Date'].astype(str) == date]
-            
-            if not date_data.empty:
-                # Calculate weighted averages for this product-date combination
-                total_net_items = date_data['Net items sold'].sum()
-                
-                if total_net_items > 0:
-                    # Weighted average price
-                    total_revenue = (date_data['Product variant price'] * date_data['Net items sold']).sum()
-                    avg_price = total_revenue / total_net_items
-                    product_date_avg_prices[product][date] = avg_price
-                    
-                    # Weighted average delivery rate
-                    delivery_rates = []
-                    cost_inputs = []
-                    
-                    for _, row in date_data.iterrows():
-                        net_items = row['Net items sold']
-                        delivery_rate = row.get('Delivery Rate', 0)
-                        cost_input = row.get('Product Cost (Input)', 0)
-                        
-                        # Convert delivery rate if it's a string percentage
-                        if isinstance(delivery_rate, str):
-                            delivery_rate = delivery_rate.strip().replace('%', '')
-                        delivery_rate = pd.to_numeric(delivery_rate, errors='coerce') or 0
-                        if delivery_rate > 1:  # assume it's given as percentage
-                            delivery_rate = delivery_rate / 100.0
-                        
-                        cost_input = pd.to_numeric(cost_input, errors='coerce') or 0
-                        
-                        if net_items > 0:
-                            delivery_rates.extend([delivery_rate] * int(net_items))
-                            cost_inputs.extend([cost_input] * int(net_items))
-                    
-                    # Calculate weighted averages
-                    if delivery_rates:
-                        product_date_delivery_rates[product][date] = sum(delivery_rates) / len(delivery_rates)
-                    
-                    if cost_inputs:
-                        product_date_cost_inputs[product][date] = sum(cost_inputs) / len(cost_inputs)
-    
-    # Display lookup summary
-    st.success("✅ Day-wise lookups created successfully!")
-    
-    # Show sample of lookups
-    sample_products = list(product_date_avg_prices.keys())[:3]  # Show first 3 products
-    for product in sample_products:
-        st.write(f"**{product}:**")
-        for date in unique_dates[:3]:  # Show first 3 dates
-            avg_price = product_date_avg_prices[product].get(date, 0)
-            delivery_rate = product_date_delivery_rates[product].get(date, 0)
-            cost_input = product_date_cost_inputs[product].get(date, 0)
-            
-            if avg_price > 0 or delivery_rate > 0 or cost_input > 0:
-                st.write(f"  • {date}: Price=${avg_price:.2f}, Rate={delivery_rate:.2%}, Cost=${cost_input:.2f}")
-
-
 
 def convert_shopify_to_excel_staff_simple(df):
     """Simple Shopify Excel conversion for staff without dates"""
@@ -881,8 +930,9 @@ def convert_shopify_to_excel_staff_simple(df):
 
 
 
-def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
-    """Convert Shopify data to Excel for staff with date columns and scoring focus"""
+
+def convert_shopify_to_excel_staff_with_date_columns_corrected(df, campaign_df=None):
+    """Convert Shopify data to Excel for staff with date columns and CORRECTED ad spend distribution"""
     if df is None or df.empty:
         return None
         
@@ -918,7 +968,7 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
         has_dates = 'Date' in df.columns
         if not has_dates:
             # Fall back to simple structure if no dates
-            return convert_shopify_to_excel_staff(df)
+            return convert_shopify_to_excel_staff_simple(df)
         
         # Get unique dates and sort them
         unique_dates = sorted([str(d) for d in df['Date'].unique() if pd.notna(d) and str(d).strip() != ''])
@@ -939,17 +989,6 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
             "num_format": "#,##0.00"
         })
         
-        product_total_format_medium = workbook.add_format({
-            "bold": True, "align": "left", "valign": "vcenter",
-            "fg_color": "#E7EE94", "font_name": "Calibri", "font_size": 11,  # Yellow
-            "num_format": "#,##0.00"
-        })
-        variant_format_medium = workbook.add_format({
-            "align": "left", "valign": "vcenter",
-            "fg_color": "#FFF2CC", "font_name": "Calibri", "font_size": 11,
-            "num_format": "#,##0.00"
-        })
-        
         product_total_format_high = workbook.add_format({
             "bold": True, "align": "left", "valign": "vcenter",
             "fg_color": "#FFD966", "font_name": "Calibri", "font_size": 11,  # Default
@@ -961,7 +1000,7 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
             "num_format": "#,##0.00"
         })
 
-        # Define base columns for staff (UPDATED: "Cost Per Item" to "C.P.I" and "Break Even Point" to "B.E")
+        # Define base columns for staff
         base_columns = ["Product title", "Product variant title", "Delivery Rate", "Product Cost (Input)", "Total Net items sold", "Amount Spent", "C.P.I", "B.E"]
         
         # Define staff metrics (simplified - only 6 metrics per date)
@@ -992,16 +1031,13 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
             else:
                 safe_write(worksheet, 0, col_num, col_name, header_format)
 
-        # UPDATED: HIDE ONLY DATE-SPECIFIC PRODUCT COST COLUMNS (NOT the base column)
         # Hide all date-specific Product Cost Input columns and Total Product Cost Input column
         for col_num, col_name in enumerate(all_columns):
-            # Hide date-specific Product Cost Input columns (e.g., "2024-01-01_Product Cost Input")
-            # and Total Product Cost Input column, but NOT the base "Product Cost (Input)" column
             if "Product Cost Input" in col_name and col_name != "Product Cost (Input)":
                 worksheet.set_column(col_num, col_num, None, None, {'hidden': True})
 
         # SET UP COLUMN GROUPING
-        start_col = 9  # After base columns + separator (now 8 base columns + 1 separator)
+        start_col = 9  # After base columns + separator
         total_columns = len(all_columns)
         
         group_level = 1
@@ -1029,9 +1065,9 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
             
             start_col = end_col + 1
         
-        # Set base column widths (all base columns are now visible)
+        # Set base column widths
         worksheet.set_column(0, 1, 25)  # Product title and variant title
-        worksheet.set_column(2, 7, 15)  # Delivery Rate, Product Cost Input, Total net items, amount spent, C.P.I, B.E
+        worksheet.set_column(2, 7, 15)  # Other base columns
         worksheet.set_column(8, 8, 3)   # Separator column
 
         worksheet.outline_settings(
@@ -1050,13 +1086,16 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
 
         # Group by product and restructure data
         for product, product_df in df.groupby("Product title"):
+            # Get canonical product name for campaign lookup
+            canonical_product = product_df['Canonical Product'].iloc[0] if 'Canonical Product' in product_df.columns else product
+            
             product_total_row_idx = row
             product_total_rows.append(product_total_row_idx)
 
             # Calculate total net items sold for dynamic formatting
             total_net_items_for_product = product_df["Net items sold"].sum()
             
-            # Dynamic color assignment based on threshold (simplified to 2 categories)
+            # Dynamic color assignment based on threshold
             if total_net_items_for_product < dynamic_threshold:
                 product_total_format = product_total_format_low
                 variant_format = variant_format_low
@@ -1100,9 +1139,9 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
                 avg_product_cost = sum(product_costs) / len(product_costs) if product_costs else 0
                 
                 safe_write(worksheet, variant_row_idx, 2, round(avg_delivery_rate, 2), variant_format)
-                safe_write(worksheet, variant_row_idx, 3, round(avg_product_cost, 2), variant_format)  # Now visible
+                safe_write(worksheet, variant_row_idx, 3, round(avg_product_cost, 2), variant_format)
                 
-                # Leave Total Net items sold, Amount Spent, C.P.I, and B.E columns empty for variants (will be calculated via formulas)
+                # Leave other base columns empty (will be calculated via formulas)
                 safe_write(worksheet, variant_row_idx, 4, "", variant_format)
                 safe_write(worksheet, variant_row_idx, 5, "", variant_format)
                 safe_write(worksheet, variant_row_idx, 6, "", variant_format)  # C.P.I
@@ -1113,7 +1152,7 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
                 base_delivery_rate_ref = f"{xl_col_to_name(2)}{excel_row}"
                 base_product_cost_ref = f"{xl_col_to_name(3)}{excel_row}"
                 
-                # Fill date-specific data and formulas
+                # Fill date-specific data
                 for date in unique_dates:
                     date_data = variant_group[variant_group['Date'].astype(str) == date]
                     
@@ -1122,7 +1161,7 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
                     avg_price_col_idx = all_columns.index(f"{date}_Avg Price")
                     ad_spend_col_idx = all_columns.index(f"{date}_Ad Spend (USD)")
                     delivery_rate_col_idx = all_columns.index(f"{date}_Delivery Rate")
-                    product_cost_input_col_idx = all_columns.index(f"{date}_Product Cost Input")  # Hidden column
+                    product_cost_input_col_idx = all_columns.index(f"{date}_Product Cost Input")
                     score_col_idx = all_columns.index(f"{date}_Score")
                     
                     # Cell references for this date
@@ -1135,16 +1174,16 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
                     if not date_data.empty:
                         row_data = date_data.iloc[0]
                         
-                        # Actual data for this date
+                        # Actual data for this date (ad spend is now correctly distributed)
                         net_items = row_data.get("Net items sold", 0) or 0
                         avg_price = row_data.get("Product variant price", 0) or 0
-                        ad_spend_usd = row_data.get("Ad Spend (USD)", 0) or 0
+                        ad_spend = row_data.get("Ad Spend (USD)", 0) or 0  # This is now correctly calculated
                         delivery_rate = row_data.get("Delivery Rate", 0) or 0
                         product_cost_input = row_data.get("Product Cost (Input)", 0) or 0
                         
                         safe_write(worksheet, variant_row_idx, net_items_col_idx, int(net_items), variant_format)
                         safe_write(worksheet, variant_row_idx, avg_price_col_idx, round(avg_price, 2), variant_format)
-                        safe_write(worksheet, variant_row_idx, ad_spend_col_idx, round(ad_spend_usd, 2), variant_format)
+                        safe_write(worksheet, variant_row_idx, ad_spend_col_idx, round(ad_spend, 2), variant_format)
                         
                         # Use specific data if available, otherwise link to base
                         if delivery_rate > 0:
@@ -1297,31 +1336,30 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
                                 variant_format
                             )
                 
-                # Calculate "Total Net items sold" for base column (link to total column)
+                # Calculate base columns using total columns
                 total_net_items_col_idx = all_columns.index("Total_Net items sold")
+                total_ad_spend_col_idx = all_columns.index("Total_Ad Spend (USD)")
+                
                 worksheet.write_formula(
                     variant_row_idx, 4,
                     f"={xl_col_to_name(total_net_items_col_idx)}{excel_row}",
                     variant_format
                 )
                 
-                # Calculate "Amount Spent" for base column (link to Total Ad Spend)
-                total_ad_spend_col_idx = all_columns.index("Total_Ad Spend (USD)")
                 worksheet.write_formula(
                     variant_row_idx, 5,
                     f"={xl_col_to_name(total_ad_spend_col_idx)}{excel_row}",
                     variant_format
                 )
                 
-                # Calculate "C.P.I" for base column (Amount Spent / Net Items Sold) - UPDATED formula
+                # Calculate "C.P.I" for base column (Amount Spent / Net Items Sold)
                 worksheet.write_formula(
                     variant_row_idx, 6,
                     f"=ROUND(IF(E{excel_row}=0,0,F{excel_row}/E{excel_row}),2)",
                     variant_format
                 )
                 
-                # Calculate "B.E" for base column (Cost per item at break-even) - UPDATED formula
-                # B.E = (Zero Score Amount Spent) ÷ Net Items Sold
+                # Calculate "B.E" for base column (Cost per item at break-even)
                 total_avg_price_col_idx = all_columns.index("Total_Avg Price")
                 total_delivery_rate_col_idx = all_columns.index("Total_Delivery Rate")
                 total_product_cost_col_idx = all_columns.index("Total_Product Cost Input")
@@ -1331,7 +1369,6 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
                 total_delivery_rate_ref = f"{xl_col_to_name(total_delivery_rate_col_idx)}{excel_row}"
                 total_product_cost_ref = f"{xl_col_to_name(total_product_cost_col_idx)}{excel_row}"
                 
-                # B.E FORMULA: (Zero Score Amount Spent) ÷ Net Items Sold = Cost per item at break-even
                 break_even_formula = f'''=IF(AND({total_avg_price_ref}>0,{total_net_items_ref}>0),
                     ((({total_avg_price_ref}*{total_net_items_ref}*IF(ISNUMBER({total_delivery_rate_ref}),IF({total_delivery_rate_ref}>1,{total_delivery_rate_ref}/100,{total_delivery_rate_ref}),0))
                     -(77*{total_net_items_ref})-(65*{total_net_items_ref})
@@ -1455,7 +1492,7 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
                 
                 # Base columns for product totals
                 base_delivery_rate_col = 2
-                base_product_cost_col = 3  # Now visible
+                base_product_cost_col = 3
                 base_total_net_items_col = 4
                 base_amount_spent_col = 5
                 base_cost_per_item_col = 6  # C.P.I
@@ -1489,7 +1526,7 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
                     product_total_format
                 )
                 
-                # Calculate "C.P.I" for product total (Amount Spent / Net Items Sold) - UPDATED
+                # Calculate "C.P.I" and "B.E" for product total
                 product_excel_row = product_total_row_idx + 1
                 worksheet.write_formula(
                     product_total_row_idx, base_cost_per_item_col,
@@ -1497,7 +1534,6 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
                     product_total_format
                 )
                 
-                # Calculate "B.E" for product total - UPDATED
                 total_avg_price_col_idx = all_columns.index("Total_Avg Price")
                 total_delivery_rate_col_idx = all_columns.index("Total_Delivery Rate")
                 total_product_cost_col_idx = all_columns.index("Total_Product Cost Input")
@@ -1522,7 +1558,7 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
         if product_total_rows:
             # Base columns for grand total
             base_delivery_rate_col = 2
-            base_product_cost_col = 3  # Now visible
+            base_product_cost_col = 3
             base_total_net_items_col = 4
             base_amount_spent_col = 5
             base_cost_per_item_col = 6  # C.P.I
@@ -1556,7 +1592,7 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
                 grand_total_format
             )
             
-            # Calculate "C.P.I" for grand total (Amount Spent / Net Items Sold) - UPDATED
+            # Calculate "C.P.I" and "B.E" for grand total
             grand_excel_row = grand_total_row_idx + 1
             worksheet.write_formula(
                 grand_total_row_idx, base_cost_per_item_col,
@@ -1564,7 +1600,6 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
                 grand_total_format
             )
             
-            # Calculate "B.E" for grand total - UPDATED
             total_avg_price_col_idx = all_columns.index("Total_Avg Price")
             total_delivery_rate_col_idx = all_columns.index("Total_Delivery Rate")
             total_product_cost_col_idx = all_columns.index("Total_Product Cost Input")
@@ -1720,171 +1755,11 @@ def convert_shopify_to_excel_staff_with_date_columns_fixed(df):
                         grand_total_format
                     )
 
-        # Freeze panes to keep base columns visible when scrolling (updated for 8 base columns)
+        # Freeze panes to keep base columns visible when scrolling
         worksheet.freeze_panes(2, len(base_columns))
     
     return output.getvalue()
 
-def convert_final_campaign_to_excel_staff_simple(df):
-    """Simple Campaign Excel conversion for staff without dates"""
-    if df.empty:
-        return None
-    
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        workbook = writer.book
-        worksheet = workbook.add_worksheet("Campaign Staff")
-        writer.sheets["Campaign Staff"] = worksheet
-
-        # Formats
-        header_format = workbook.add_format({
-            "bold": True, "align": "center", "valign": "vcenter",
-            "fg_color": "#BDD7EE", "font_name": "Calibri", "font_size": 11
-        })
-        grand_total_format = workbook.add_format({
-            "bold": True, "align": "left", "valign": "vcenter",
-            "fg_color": "#EEEE0E", "font_name": "Calibri", "font_size": 11
-        })
-        product_total_format = workbook.add_format({
-            "bold": True, "align": "left", "valign": "vcenter",
-            "fg_color": "#E7EE94", "font_name": "Calibri", "font_size": 11
-        })
-        campaign_format = workbook.add_format({
-            "align": "left", "valign": "vcenter",
-            "font_name": "Calibri", "font_size": 11
-        })
-
-        # Staff columns (simplified)
-        columns = ["Product", "Campaign Name", "Amount Spent (USD)", "Purchases", "Cost Per Purchase (USD)", "Score"]
-
-        # Write headers
-        for col_num, col_name in enumerate(columns):
-            worksheet.write(0, col_num, col_name, header_format)
-
-        # Column indexes
-        spent_col = columns.index("Amount Spent (USD)")
-        purchases_col = columns.index("Purchases")
-        cpp_col = columns.index("Cost Per Purchase (USD)")
-        score_col = columns.index("Score")
-
-        # Grand total row
-        grand_total_row_idx = 1
-        safe_write(worksheet, grand_total_row_idx, 0, "ALL PRODUCTS", grand_total_format)
-        safe_write(worksheet, grand_total_row_idx, 1, "GRAND TOTAL", grand_total_format)
-
-        row = grand_total_row_idx + 1
-        product_total_rows = []
-
-        for product, product_df in df.groupby("Product"):
-            avg_price = avg_price_lookup.get(product, 0)
-            product_cost = avg_product_cost_lookup.get(product, 0)
-            delivery_rate = shopify_totals.get(product, {}).get("Delivery Rate", 0)
-
-            # Pre-compute CPP for sorting
-            product_df = product_df.copy()
-            product_df["CPP"] = product_df.apply(
-                lambda r: round(r["Amount Spent (USD)"] / r["Purchases"], 2) if pd.notna(r.get("Purchases")) and r.get("Purchases", 0) > 0 else float("inf"),
-                axis=1
-            )
-            product_df = product_df.sort_values("CPP", ascending=True)
-
-            # Product total row
-            product_row = row
-            product_total_rows.append(product_row)
-            safe_write(worksheet, product_row, 0, product, product_total_format)
-            safe_write(worksheet, product_row, 1, "ALL CAMPAIGNS (TOTAL)", product_total_format)
-
-            # Campaign rows
-            row += 1
-            first_campaign_row = row
-            for _, campaign in product_df.iterrows():
-                campaign_row = row
-                excel_row = campaign_row + 1
-
-                safe_write(worksheet, campaign_row, 0, "", campaign_format)
-                safe_write(worksheet, campaign_row, 1, campaign.get("Campaign Name", ""), campaign_format)
-                safe_write(worksheet, campaign_row, spent_col, round(campaign.get("Amount Spent (USD)", 0), 2), campaign_format)
-                safe_write(worksheet, campaign_row, purchases_col, campaign.get("Purchases", 0), campaign_format)
-
-                spent_ref = xl_col_to_name(spent_col) + str(excel_row)
-                purchases_ref = xl_col_to_name(purchases_col) + str(excel_row)
-
-                # Cost Per Purchase formula
-                cpp_formula = f"=IF({purchases_ref}>0,{spent_ref}/{purchases_ref},0)"
-                worksheet.write_formula(campaign_row, cpp_col, cpp_formula, campaign_format)
-
-                # Score formula
-                score_formula = (
-                    f"=IF(AND({purchases_ref}>0,{avg_price}>0),"
-                    f"(({avg_price}*{purchases_ref}*{delivery_rate})"
-                    f"-({spent_ref}*100)-(77*{purchases_ref})-(65*{purchases_ref})"
-                    f"-({product_cost}*{purchases_ref}*{delivery_rate}))"
-                    f"/(({avg_price}*{purchases_ref}*{delivery_rate})*0.1),0)"
-                )
-                worksheet.write_formula(campaign_row, score_col, score_formula, campaign_format)
-
-                row += 1
-
-            last_campaign_row = row - 1
-
-            # Product totals formulas
-            excel_first = first_campaign_row + 1
-            excel_last = last_campaign_row + 1
-            
-            # Sum formulas
-            worksheet.write_formula(product_row, spent_col, f"=SUM({xl_col_to_name(spent_col)}{excel_first}:{xl_col_to_name(spent_col)}{excel_last})", product_total_format)
-            worksheet.write_formula(product_row, purchases_col, f"=SUM({xl_col_to_name(purchases_col)}{excel_first}:{xl_col_to_name(purchases_col)}{excel_last})", product_total_format)
-
-            # Cost Per Purchase for product total
-            spent_ref = f"{xl_col_to_name(spent_col)}{product_row+1}"
-            purchases_ref = f"{xl_col_to_name(purchases_col)}{product_row+1}"
-            worksheet.write_formula(product_row, cpp_col, f"=IF({purchases_ref}>0,{spent_ref}/{purchases_ref},0)", product_total_format)
-
-            # Score for product total
-            score_formula = (
-                f"=IF(AND({purchases_ref}>0,{avg_price}>0),"
-                f"(({avg_price}*{purchases_ref}*{delivery_rate})"
-                f"-({spent_ref}*100)-(77*{purchases_ref})-(65*{purchases_ref})"
-                f"-({product_cost}*{purchases_ref}*{delivery_rate}))"
-                f"/(({avg_price}*{purchases_ref}*{delivery_rate})*0.1),0)"
-            )
-            worksheet.write_formula(product_row, score_col, score_formula, product_total_format)
-
-        # Grand total formulas
-        if product_total_rows:
-            excel_rows = [str(row_idx + 1) for row_idx in product_total_rows]
-            
-            # Sum formulas
-            worksheet.write_formula(grand_total_row_idx, spent_col, f"=SUM({','.join([f'{xl_col_to_name(spent_col)}{row}' for row in excel_rows])})", grand_total_format)
-            worksheet.write_formula(grand_total_row_idx, purchases_col, f"=SUM({','.join([f'{xl_col_to_name(purchases_col)}{row}' for row in excel_rows])})", grand_total_format)
-
-            # Cost Per Purchase for grand total
-            spent_ref = f"{xl_col_to_name(spent_col)}{grand_total_row_idx+1}"
-            purchases_ref = f"{xl_col_to_name(purchases_col)}{grand_total_row_idx+1}"
-            worksheet.write_formula(grand_total_row_idx, cpp_col, f"=IF({purchases_ref}>0,{spent_ref}/{purchases_ref},0)", grand_total_format)
-
-            # Score for grand total (use overall weighted averages)
-            overall_avg_price = sum(avg_price_lookup.values()) / len(avg_price_lookup) if avg_price_lookup else 0
-            overall_delivery_rate = sum([v["Delivery Rate"] for v in shopify_totals.values()]) / len(shopify_totals) if shopify_totals else 0
-            overall_product_cost = sum(avg_product_cost_lookup.values()) / len(avg_product_cost_lookup) if avg_product_cost_lookup else 0
-            
-            score_formula = (
-                f"=IF(AND({purchases_ref}>0,{overall_avg_price}>0),"
-                f"(({overall_avg_price}*{purchases_ref}*{overall_delivery_rate})"
-                f"-({spent_ref}*100)-(77*{purchases_ref})-(65*{purchases_ref})"
-                f"-({overall_product_cost}*{purchases_ref}*{overall_delivery_rate}))"
-                f"/(({overall_avg_price}*{purchases_ref}*{overall_delivery_rate})*0.1),0)"
-            )
-            worksheet.write_formula(grand_total_row_idx, score_col, score_formula, grand_total_format)
-
-        worksheet.freeze_panes(1, 0)
-        for i, col in enumerate(columns):
-            if col in ("Product", "Campaign Name"):
-                worksheet.set_column(i, i, 35)
-            else:
-                worksheet.set_column(i, i, 18)
-
-    return output.getvalue()
 
 
 def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df=None):
@@ -2887,6 +2762,8 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
     return output.getvalue()
 
 
+
+
 st.header("📥 Download Processed Files")
 
 # ---- SHOPIFY DOWNLOAD ----
@@ -2894,7 +2771,7 @@ if df_shopify is not None:
     export_df = df_shopify.drop(columns=["Product Name", "Canonical Product"], errors="ignore")
 
     # Use simple structure for staff version
-    shopify_excel = convert_shopify_to_excel_staff_with_date_columns_fixed(export_df)
+    shopify_excel = convert_shopify_to_excel_staff_with_date_columns_corrected(export_df)
     st.download_button(
         label="📥 Download Staff Shopify File (Excel)",
         data=shopify_excel,
@@ -2965,6 +2842,7 @@ if campaign_files or shopify_files or old_merged_files:
         
     
         
+
 
 
 
