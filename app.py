@@ -503,6 +503,9 @@ if shopify_files:
 
         # ---- CORRECTED AD SPEND ALLOCATION (DAY-WISE DISTRIBUTION) ----
         if grouped_campaign is not None and df_campaign is not None:
+            # Initialize Ad Spend to 0 for all rows
+            df_shopify["Ad Spend (USD)"] = 0.0
+            
             # Create campaign spend lookup by product and date
             campaign_spend_by_product_date = {}
             
@@ -521,9 +524,14 @@ if shopify_files:
                     
                     campaign_spend_by_product_date[product][date] += amount_usd
             
+            # FIXED: Track which products have received date-specific allocation
+            products_with_date_allocation = set()
+            
             # Now allocate ad spend to Shopify variants based on their share of items sold per product per date
             for product, product_df in df_shopify.groupby("Canonical Product"):
                 if product in campaign_spend_by_product_date:
+                    has_any_date_allocation = False
+                    
                     # For each date, calculate total items sold by this product on that date
                     for date in campaign_spend_by_product_date[product].keys():
                         date_campaign_spend = campaign_spend_by_product_date[product][date]
@@ -543,22 +551,27 @@ if shopify_files:
                                     
                                     # Update the ad spend for this specific variant on this date
                                     df_shopify.loc[idx, "Ad Spend (USD)"] = variant_ad_spend
+                                    has_any_date_allocation = True
+                    
+                    # FIXED: Mark this product as having received date-specific allocation
+                    if has_any_date_allocation:
+                        products_with_date_allocation.add(product)
             
             # For products without date-specific campaign data, fall back to total allocation
             ad_spend_map = dict(zip(grouped_campaign["Product"], grouped_campaign["Total Amount Spent (USD)"]))
             
             for product, product_df in df_shopify.groupby("Canonical Product"):
-                # Only allocate total spend for variants that don't have date-specific allocation
-                variants_without_date_allocation = product_df[product_df["Ad Spend (USD)"] == 0]
-                
-                if not variants_without_date_allocation.empty and product in ad_spend_map:
-                    total_items = variants_without_date_allocation["Net items sold"].sum()
+                # FIXED: Only allocate total spend if this product did NOT get date-specific allocation
+                if product not in products_with_date_allocation and product in ad_spend_map:
+                    total_items = product_df["Net items sold"].sum()
                     if total_items > 0:
                         total_spend_usd = ad_spend_map[product]
                         
                         # Allocate spend based on items sold
-                        ratio = variants_without_date_allocation["Net items sold"] / total_items
-                        df_shopify.loc[variants_without_date_allocation.index, "Ad Spend (USD)"] = total_spend_usd * ratio
+                        for idx, variant_row in product_df.iterrows():
+                            variant_items = variant_row['Net items sold']
+                            variant_share = variant_items / total_items
+                            df_shopify.loc[idx, "Ad Spend (USD)"] = total_spend_usd * variant_share
 
         # ---- CREATE DAY-WISE LOOKUPS FROM SHOPIFY DATA ----
         if df_shopify is not None and not df_shopify.empty and 'Date' in df_shopify.columns:
@@ -684,7 +697,6 @@ if shopify_files:
         # Display without internal columns
         display_cols = [col for col in df_shopify.columns if col not in ["Product Name", "Canonical Product"]]
         st.write(df_shopify[display_cols])
-
 
 
 # ---- BUILD SHOPIFY TOTALS LOOKUP ----
@@ -898,7 +910,7 @@ def convert_shopify_to_excel_staff_with_date_columns_corrected(df, campaign_df=N
                     end_col - 1, 
                     12, 
                     None, 
-                    {'level': group_level, 'collapsed': True}
+                    {'level': group_level, 'collapsed': True, 'hidden': True}
                 )
             
             start_col = end_col + 1
@@ -1588,9 +1600,7 @@ def convert_shopify_to_excel_staff_with_date_columns_corrected(df, campaign_df=N
     
     return output.getvalue()
 
-
-
-def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df=None):
+def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df=None, selected_days=None):
     """Convert Campaign data to Excel for staff with day-wise lookups and scoring focus"""
     if df.empty:
         return None
@@ -1644,10 +1654,20 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
             "fg_color": "#FFC0CB", "font_name": "Calibri", "font_size": 11  # Light pink background
         })
 
-       
+        # Check if we have dates
+        has_dates = 'Date' in df.columns
+        if not has_dates:
+            # Fall back to original structure if no dates
+            return convert_final_campaign_to_excel_staff(df, shopify_df)
         
         # Get unique dates and sort them
         unique_dates = sorted([str(d) for d in df['Date'].unique() if pd.notna(d) and str(d).strip() != ''])
+        if selected_days is None:
+            if len(unique_dates) > 0:
+                n_days = len(unique_dates)
+                selected_days = n_days // 2 if n_days % 2 == 0 else (n_days + 1) // 2
+            else:
+                selected_days = 1
         
         # Define base columns for staff (CHANGED: "Cost Per Purchase" to "C.P.P" and "Break Even Point" to "B.E")
         base_columns = ["Product Name", "Campaign Name", "Total Amount Spent (USD)", "Purchases", "C.P.P", "B.E"]
@@ -1714,7 +1734,7 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
                     end_col - 1, 
                     12, 
                     None, 
-                    {'level': group_level, 'collapsed': True}
+                    {'level': group_level, 'collapsed': True, 'hidden': True}
                 )
             
             start_col = end_col + 1
@@ -1750,6 +1770,44 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
 
         row = grand_total_row_idx + 1
         product_total_rows = []
+
+        # NEW: Pre-calculate product-level delivery rates AND average prices for Total columns
+        product_total_delivery_rates = {}
+        product_total_avg_prices = {}
+        
+        for product, product_df in df.groupby("Product"):
+            # Calculate weighted average delivery rate for this product across all dates
+            total_purchases_delivery = 0
+            weighted_delivery_rate_sum = 0
+            
+            # Calculate weighted average price for this product across all dates
+            total_purchases_price = 0
+            weighted_avg_price_sum = 0
+            
+            for date in unique_dates:
+                date_delivery_rate = product_date_delivery_rates.get(product, {}).get(date, 0)
+                date_avg_price = product_date_avg_prices.get(product, {}).get(date, 0)
+                date_purchases = product_df[product_df['Date'].astype(str) == date]['Purchases'].sum() if 'Purchases' in product_df.columns else 0
+                
+                # For delivery rate calculation
+                total_purchases_delivery += date_purchases
+                weighted_delivery_rate_sum += date_delivery_rate * date_purchases
+                
+                # For average price calculation
+                total_purchases_price += date_purchases
+                weighted_avg_price_sum += date_avg_price * date_purchases
+            
+            # Calculate weighted average delivery rate for this product
+            if total_purchases_delivery > 0:
+                product_total_delivery_rates[product] = weighted_delivery_rate_sum / total_purchases_delivery
+            else:
+                product_total_delivery_rates[product] = 0
+            
+            # Calculate weighted average price for this product
+            if total_purchases_price > 0:
+                product_total_avg_prices[product] = weighted_avg_price_sum / total_purchases_price
+            else:
+                product_total_avg_prices[product] = 0
 
         # Group by product and restructure data
         for product, product_df in df.groupby("Product"):
@@ -1793,6 +1851,8 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
                 cost_per_purchase = 0
                 if total_purchases > 0:
                     cost_per_purchase = total_amount_spent_usd / total_purchases
+                elif total_amount_spent_usd > 0 and total_purchases == 0:
+                    cost_per_purchase = total_amount_spent_usd / 1  # Use 1 for zero purchases but has spending
                 
                 campaign_info = {
                     'Product': str(product) if pd.notna(product) else '',
@@ -2487,8 +2547,6 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
         # Freeze panes to keep base columns visible when scrolling
         worksheet.freeze_panes(2, len(base_columns))
         
-       
-        
         # ==== UNMATCHED CAMPAIGNS SHEET ====
         unmatched_sheet = workbook.add_worksheet("Unmatched Campaigns")
         
@@ -2531,8 +2589,11 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
             current_row += 1
             
             for campaign in unmatched_campaigns:
+                # MODIFIED CPP calculation for unmatched campaigns sheet
                 cost_per_purchase_usd = 0
-                if campaign['Purchases'] > 0:
+                if campaign['Amount Spent (USD)'] > 0 and campaign['Purchases'] == 0:
+                    cost_per_purchase_usd = round(campaign['Amount Spent (USD)'] / 1, 2)  # Use 1 when no purchases but has spending
+                elif campaign['Purchases'] > 0:
                     cost_per_purchase_usd = round(campaign['Amount Spent (USD)'] / campaign['Purchases'], 2)
                 
                 dates_str = ", ".join(campaign['Dates']) if campaign['Dates'] else "No dates"
@@ -2554,8 +2615,11 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
             current_row += 1
             
             for campaign in matched_campaigns[:10]:  # Show only first 10 to save space
+                # MODIFIED CPP calculation for matched campaigns sheet
                 cost_per_purchase_usd = 0
-                if campaign['Purchases'] > 0:
+                if campaign['Amount Spent (USD)'] > 0 and campaign['Purchases'] == 0:
+                    cost_per_purchase_usd = round(campaign['Amount Spent (USD)'] / 1, 2)  # Use 1 when no purchases but has spending
+                elif campaign['Purchases'] > 0:
                     cost_per_purchase_usd = round(campaign['Amount Spent (USD)'] / campaign['Purchases'], 2)
                 
                 dates_str = ", ".join(campaign['Dates']) if campaign['Dates'] else "No dates"
@@ -2582,13 +2646,10 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
         unmatched_sheet.set_column(5, 5, 20)  # C.P.P USD
         unmatched_sheet.set_column(6, 6, 25)  # Dates Covered
         unmatched_sheet.set_column(7, 7, 40)  # Reason
-    
-        
-        
-       
-        # ==== UPDATED NEGATIVE SCORE CAMPAIGNS SHEET ====
+
+        # ==== NEW SHEET: Negative Score Campaigns ====
         negative_score_sheet = workbook.add_worksheet("Negative Score Campaigns")
-        
+
         # Formats for negative score sheet
         negative_score_header_format = workbook.add_format({
             "bold": True, "align": "center", "valign": "vcenter",
@@ -2599,18 +2660,55 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
             "fg_color": "#FFE6E6", "font_name": "Calibri", "font_size": 11,
             "num_format": "#,##0.00"
         })
-        
-        # Headers for negative score sheet
-        negative_headers = ["Product", "Campaign Name", "Total Dates", "Days Checked", 
-                           "Days with Negative Scores", "Average Negative Score", "Negative Score Dates", "Reason"]
-        
+        # NEW: Format for last date negative campaigns
+        last_date_header_format = workbook.add_format({
+            "bold": True, "align": "center", "valign": "vcenter",
+            "fg_color": "#FFA500", "font_name": "Calibri", "font_size": 11
+        })
+        last_date_data_format = workbook.add_format({
+            "align": "left", "valign": "vcenter",
+            "fg_color": "#FFE4B5", "font_name": "Calibri", "font_size": 11,
+            "num_format": "#,##0.00"
+        })
+
+        # FIXED: Helper function to format dates in a more readable way
+        def format_date_readable(date_str):
+            """Convert date string to more readable format like '9 Sep 2025'"""
+            try:
+                from datetime import datetime
+                # Try different date formats
+                for fmt in ['%Y-%m-%d', '%d/%m/%Y', '%m/%d/%Y', '%d-%m-%Y']:
+                    try:
+                        date_obj = datetime.strptime(date_str, fmt)
+                        # Format as "9 Sep 2025" - use %d instead of %-d for better compatibility
+                        formatted_date = date_obj.strftime("%d %b %Y")
+                        # Remove leading zero from day if present
+                        if formatted_date.startswith('0'):
+                            formatted_date = formatted_date[1:]
+                        return formatted_date
+                    except ValueError:
+                        continue
+                
+                # If no format works, return original
+                return date_str
+            except:
+                return date_str
+
+        # UPDATED Headers for negative score sheet - Added Amount Spent (USD) and Score columns, removed Average Negative Score
+        negative_headers = ["Product", "Campaign Name", "C.P.P", "B.E", "Amount Spent (USD)", "Score", "Total Dates", "Days Checked", 
+                           "Days with Negative Score", "Negative Score Dates", "Reason"]
+
         for col_num, header in enumerate(negative_headers):
             safe_write(negative_score_sheet, 0, col_num, header, negative_score_header_format)
-        
-        # Analyze campaigns for negative scores using the selected_days parameter
-        negative_campaigns = []
+
+        # Calculate selected_days threshold (default: len(unique_dates) // 2, minimum 1)
+        if selected_days is None:
+            selected_days = max(1, len(unique_dates) // 2)
+
+        # Analyze campaigns for negative scores
+        negative_score_campaigns = []
         current_row = 1
-        
+
         # Group by product and campaign to analyze scores
         for product, product_df in df.groupby("Product"):
             for campaign_name, campaign_group in product_df.groupby("Campaign Name"):
@@ -2619,6 +2717,55 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
                 
                 if len(campaign_dates) < selected_days:  # Skip campaigns with fewer dates than selected
                     continue
+                
+                # Calculate CPP and Amount Spent for this campaign
+                total_amount_spent_usd = campaign_group.get("Amount Spent (USD)", 0).sum() if "Amount Spent (USD)" in campaign_group.columns else 0
+                total_purchases = campaign_group.get("Purchases", 0).sum() if "Purchases" in campaign_group.columns else 0
+                
+                # Calculate CPP (Cost Per Purchase)
+                cpp = 0
+                if total_amount_spent_usd > 0 and total_purchases == 0:
+                    cpp = total_amount_spent_usd / 1  # Use 1 for formula purposes when no purchases but has spending
+                elif total_purchases > 0:
+                    cpp = total_amount_spent_usd / total_purchases
+                
+                # Calculate B.E (Break Even) for this campaign - use the same logic as in main sheet
+                # Get average product cost for this product across all dates
+                product_costs = []
+                for date in unique_dates:
+                    date_cost = product_date_cost_inputs.get(product, {}).get(date, 0)
+                    if date_cost > 0:
+                        product_costs.append(date_cost)
+                avg_product_cost = sum(product_costs) / len(product_costs) if product_costs else 0
+                
+                # Get product-level average price and delivery rate
+                product_avg_price = product_total_avg_prices.get(product, 0)
+                product_delivery_rate = product_total_delivery_rates.get(product, 0)
+                
+                # Calculate B.E
+                be = 0
+                if product_avg_price > 0 and (total_purchases > 0 or (total_purchases == 0 and total_amount_spent_usd > 0)):
+                    calc_purchases = 1 if (total_purchases == 0 and total_amount_spent_usd > 0) else total_purchases
+                    delivery_rate = product_delivery_rate / 100 if product_delivery_rate > 1 else product_delivery_rate
+                    
+                    revenue = product_avg_price * calc_purchases * delivery_rate
+                    costs = (77 * calc_purchases) + (65 * calc_purchases) + (avg_product_cost * calc_purchases * delivery_rate)
+                    
+                    if calc_purchases > 0:
+                        be = (revenue - costs) / 100 / calc_purchases
+
+                # Calculate overall Score for this campaign using Total columns logic
+                overall_score = 0
+                if product_avg_price > 0 and (total_purchases > 0 or (total_purchases == 0 and total_amount_spent_usd > 0)):
+                    calc_purchases = 1 if (total_purchases == 0 and total_amount_spent_usd > 0) else total_purchases
+                    delivery_rate = product_delivery_rate / 100 if product_delivery_rate > 1 else product_delivery_rate
+                    
+                    revenue = product_avg_price * calc_purchases * delivery_rate
+                    costs = (total_amount_spent_usd * 100) + (77 * calc_purchases) + (65 * calc_purchases) + (avg_product_cost * calc_purchases * delivery_rate)
+                    profit = revenue - costs
+                    
+                    # Score = Profit / (Revenue * 0.1)
+                    overall_score = (profit / (revenue * 0.1)) if revenue > 0 else 0
                 
                 # Calculate scores for ALL dates
                 date_scores = []
@@ -2638,17 +2785,19 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
                         
                         # Calculate score using the same logic as in the main sheet
                         if date_avg_price > 0 and (purchases > 0 or (purchases == 0 and amount_spent > 0)):
-                            # Handle zero purchases case
+                            # Handle zero purchases case - use 1 when amount spent > 0 but purchases = 0
                             calc_purchases = 1 if (purchases == 0 and amount_spent > 0) else purchases
                             
                             # Delivery rate conversion
                             delivery_rate = date_delivery_rate / 100 if date_delivery_rate > 1 else date_delivery_rate
                             
-                            # Score calculation
+                            # Calculate components for score
                             revenue = date_avg_price * calc_purchases * delivery_rate
                             costs = (amount_spent * 100) + (77 * calc_purchases) + (65 * calc_purchases) + (date_product_cost * calc_purchases * delivery_rate)
                             profit = revenue - costs
-                            score = profit / (revenue * 0.1) if revenue > 0 else 0
+                            
+                            # Score = Profit / (Revenue * 0.1)
+                            score = (profit / (revenue * 0.1)) if revenue > 0 else 0
                             
                             date_scores.append({
                                 'date': date,
@@ -2657,80 +2806,230 @@ def convert_final_campaign_to_excel_staff_with_date_columns_fixed(df, shopify_df
                                 'purchases': purchases
                             })
                 
-                # Count negative scores and check if we have at least 'selected_days' negative scores
-                negative_score_data = [score_data for score_data in date_scores if score_data['score'] < 0]
+                # Count negative scores and check if we have at least 'selected_days' negative values
+                negative_score_data = [data for data in date_scores if data['score'] < 0]
                 
                 if len(negative_score_data) >= selected_days:
-                    # This campaign has the required number of negative scores (randomly distributed)
-                    avg_negative_score = sum(score_data['score'] for score_data in negative_score_data) / len(negative_score_data)
-                    negative_dates = [score_data['date'] for score_data in negative_score_data]
+                    # This campaign has the required number of negative scores
+                    negative_dates = [data['date'] for data in negative_score_data]
+                    
+                    # Format dates in a more readable way
+                    formatted_negative_dates = [format_date_readable(date) for date in negative_dates[:10]]
+                    formatted_dates_str = ", ".join(formatted_negative_dates)
+                    if len(negative_dates) > 10:
+                        formatted_dates_str += "..."
                     
                     negative_campaign = {
                         'Product': str(product),
                         'Campaign Name': str(campaign_name),
                         'Total Dates': len(campaign_dates),
                         'Days Checked': selected_days,
-                        'Days with Negative Scores': len(negative_score_data),
-                        'Average Negative Score': round(avg_negative_score, 2),
-                        'Negative Score Dates': ", ".join(negative_dates[:10]) + ("..." if len(negative_dates) > 10 else ""),
+                        'Days with Negative Score': len(negative_score_data),
+                        'C.P.P': round(cpp, 2),
+                        'B.E': round(be, 2),
+                        'Amount Spent (USD)': round(total_amount_spent_usd, 2),  # NEW: Added amount spent
+                        'Score': round(overall_score, 2),  # NEW: Added overall score
+                        'Negative Score Dates': formatted_dates_str,
                         'Reason': f"Has {len(negative_score_data)} negative score days out of {len(campaign_dates)} total days (threshold: {selected_days})"
                     }
                     
-                    negative_campaigns.append(negative_campaign)
-        
-        # Write negative campaigns to sheet
-        if negative_campaigns:
+                    negative_score_campaigns.append(negative_campaign)
+
+        # Write negative score campaigns to sheet (FIRST TABLE)
+        if negative_score_campaigns:
             # Sort by number of negative days (worst first)
-            negative_campaigns.sort(key=lambda x: x['Days with Negative Scores'], reverse=True)
+            negative_score_campaigns.sort(key=lambda x: x['Days with Negative Score'], reverse=True)
             
-            for campaign in negative_campaigns:
+            for campaign in negative_score_campaigns:
                 safe_write(negative_score_sheet, current_row, 0, campaign['Product'], negative_score_data_format)
                 safe_write(negative_score_sheet, current_row, 1, campaign['Campaign Name'], negative_score_data_format)
-                safe_write(negative_score_sheet, current_row, 2, campaign['Total Dates'], negative_score_data_format)
-                safe_write(negative_score_sheet, current_row, 3, campaign['Days Checked'], negative_score_data_format)
-                safe_write(negative_score_sheet, current_row, 4, campaign['Days with Negative Scores'], negative_score_data_format)
-                safe_write(negative_score_sheet, current_row, 5, campaign['Average Negative Score'], negative_score_data_format)
-                safe_write(negative_score_sheet, current_row, 6, campaign['Negative Score Dates'], negative_score_data_format)
-                safe_write(negative_score_sheet, current_row, 7, campaign['Reason'], negative_score_data_format)
+                safe_write(negative_score_sheet, current_row, 2, campaign['C.P.P'], negative_score_data_format)
+                safe_write(negative_score_sheet, current_row, 3, campaign['B.E'], negative_score_data_format)
+                safe_write(negative_score_sheet, current_row, 4, campaign['Amount Spent (USD)'], negative_score_data_format)  # NEW: Amount Spent
+                safe_write(negative_score_sheet, current_row, 5, campaign['Score'], negative_score_data_format)  # NEW: Score
+                safe_write(negative_score_sheet, current_row, 6, campaign['Total Dates'], negative_score_data_format)
+                safe_write(negative_score_sheet, current_row, 7, campaign['Days Checked'], negative_score_data_format)
+                safe_write(negative_score_sheet, current_row, 8, campaign['Days with Negative Score'], negative_score_data_format)
+                safe_write(negative_score_sheet, current_row, 9, campaign['Negative Score Dates'], negative_score_data_format)
+                safe_write(negative_score_sheet, current_row, 10, campaign['Reason'], negative_score_data_format)
                 current_row += 1
         else:
             # No negative campaigns found
             safe_write(negative_score_sheet, current_row, 0, f"No campaigns found with {selected_days} or more negative score days", negative_score_data_format)
-        
-        # Add summary
-        safe_write(negative_score_sheet, current_row + 2, 0, "SUMMARY", negative_score_header_format)
-        
+            current_row += 1
+
+        # Add summary for first table
+        safe_write(negative_score_sheet, current_row + 1, 0, "SUMMARY - DAYS CHECKED TABLE", negative_score_header_format)
+
         # Count total campaigns correctly
         total_campaigns = 0
         for product, product_df in df.groupby("Product"):
             total_campaigns += len(product_df.groupby("Campaign Name"))
+
+        safe_write(negative_score_sheet, current_row + 2, 0, f"Total campaigns analyzed: {total_campaigns}", negative_score_data_format)
+        safe_write(negative_score_sheet, current_row + 3, 0, f"Campaigns with {selected_days}+ negative score days: {len(negative_score_campaigns)}", negative_score_data_format)
+        safe_write(negative_score_sheet, current_row + 4, 0, f"Days threshold used: {selected_days} out of {len(unique_dates)} total unique dates", negative_score_data_format)
+        safe_write(negative_score_sheet, current_row + 5, 0, f"Date range analyzed: {min(unique_dates)} to {max(unique_dates)}" if unique_dates else "No dates found", negative_score_data_format)
+
+        # NEW: SECOND TABLE - LAST DATE NEGATIVE SCORE CAMPAIGNS
+        current_row += 8  # Add some space between tables
         
-        safe_write(negative_score_sheet, current_row + 3, 0, f"Total campaigns analyzed: {total_campaigns}", negative_score_data_format)
-        safe_write(negative_score_sheet, current_row + 4, 0, f"Campaigns with {selected_days}+ negative score days: {len(negative_campaigns)}", negative_score_data_format)
-        safe_write(negative_score_sheet, current_row + 5, 0, f"Days threshold used: {selected_days} out of {len(unique_dates)} total unique dates", negative_score_data_format)
-        safe_write(negative_score_sheet, current_row + 6, 0, f"Date range analyzed: {min(unique_dates)} to {max(unique_dates)}" if unique_dates else "No dates found", negative_score_data_format)
+        # Headers for second table
+        safe_write(negative_score_sheet, current_row, 0, "CAMPAIGNS WITH NEGATIVE SCORE ON LAST DATE", last_date_header_format)
+        current_row += 1
         
-        # Set column widths for negative score sheet
+        # UPDATED Headers for second table - Added Amount Spent (USD) column
+        last_date_headers = ["Product", "Campaign Name", "C.P.P", "B.E", "Amount Spent (USD)", "Last Date", "Last Date Score", 
+                           "Last Date Amount Spent (USD)", "Last Date Purchases", "Reason"]
+
+        for col_num, header in enumerate(last_date_headers):
+            safe_write(negative_score_sheet, current_row, col_num, header, last_date_header_format)
+        current_row += 1
+
+        # Get the last date
+        last_date = unique_dates[-1] if unique_dates else None
+        
+        # Create set of campaigns already in first table to avoid duplicates
+        first_table_campaigns = set()
+        for campaign in negative_score_campaigns:
+            first_table_campaigns.add((campaign['Product'], campaign['Campaign Name']))
+
+        # Analyze campaigns for last date negative scores
+        last_date_negative_campaigns = []
+        
+        if last_date:
+            for product, product_df in df.groupby("Product"):
+                for campaign_name, campaign_group in product_df.groupby("Campaign Name"):
+                    # Skip if this campaign is already in the first table
+                    if (str(product), str(campaign_name)) in first_table_campaigns:
+                        continue
+                    
+                    # Check if this campaign has data for the last date
+                    last_date_data = campaign_group[campaign_group['Date'].astype(str) == last_date]
+                    if last_date_data.empty:
+                        continue
+                    
+                    row_data = last_date_data.iloc[0]
+                    
+                    # Calculate CPP and Amount Spent for this campaign
+                    total_amount_spent_usd = campaign_group.get("Amount Spent (USD)", 0).sum() if "Amount Spent (USD)" in campaign_group.columns else 0
+                    total_purchases = campaign_group.get("Purchases", 0).sum() if "Purchases" in campaign_group.columns else 0
+                    
+                    # Calculate CPP (Cost Per Purchase)
+                    cpp = 0
+                    if total_amount_spent_usd > 0 and total_purchases == 0:
+                        cpp = total_amount_spent_usd / 1  # Use 1 for formula purposes when no purchases but has spending
+                    elif total_purchases > 0:
+                        cpp = total_amount_spent_usd / total_purchases
+                    
+                    # Calculate B.E for this campaign - same logic as before
+                    product_costs = []
+                    for date in unique_dates:
+                        date_cost = product_date_cost_inputs.get(product, {}).get(date, 0)
+                        if date_cost > 0:
+                            product_costs.append(date_cost)
+                    avg_product_cost = sum(product_costs) / len(product_costs) if product_costs else 0
+                    
+                    # Get product-level average price and delivery rate
+                    product_avg_price = product_total_avg_prices.get(product, 0)
+                    product_delivery_rate = product_total_delivery_rates.get(product, 0)
+                    
+                    # Calculate B.E
+                    be = 0
+                    if product_avg_price > 0 and (total_purchases > 0 or (total_purchases == 0 and total_amount_spent_usd > 0)):
+                        calc_purchases = 1 if (total_purchases == 0 and total_amount_spent_usd > 0) else total_purchases
+                        delivery_rate = product_delivery_rate / 100 if product_delivery_rate > 1 else product_delivery_rate
+                        
+                        revenue = product_avg_price * calc_purchases * delivery_rate
+                        costs = (77 * calc_purchases) + (65 * calc_purchases) + (avg_product_cost * calc_purchases * delivery_rate)
+                        
+                        if calc_purchases > 0:
+                            be = (revenue - costs) / 100 / calc_purchases
+                    
+                    # Get data for last date score calculation
+                    amount_spent = row_data.get("Amount Spent (USD)", 0) or 0
+                    purchases = row_data.get("Purchases", 0) or 0
+                    
+                    # Get day-wise lookup data for last date
+                    date_avg_price = product_date_avg_prices.get(product, {}).get(last_date, 0)
+                    date_delivery_rate = product_date_delivery_rates.get(product, {}).get(last_date, 0)
+                    date_product_cost = product_date_cost_inputs.get(product, {}).get(last_date, 0)
+                    
+                    # Calculate score for last date
+                    if date_avg_price > 0 and (purchases > 0 or (purchases == 0 and amount_spent > 0)):
+                        # Handle zero purchases case - use 1 when amount spent > 0 but purchases = 0
+                        calc_purchases = 1 if (purchases == 0 and amount_spent > 0) else purchases
+                        
+                        # Delivery rate conversion
+                        delivery_rate = date_delivery_rate / 100 if date_delivery_rate > 1 else date_delivery_rate
+                        
+                        # Calculate components for score
+                        revenue = date_avg_price * calc_purchases * delivery_rate
+                        costs = (amount_spent * 100) + (77 * calc_purchases) + (65 * calc_purchases) + (date_product_cost * calc_purchases * delivery_rate)
+                        profit = revenue - costs
+                        
+                        # Score = Profit / (Revenue * 0.1)
+                        score = (profit / (revenue * 0.1)) if revenue > 0 else 0
+                        
+                        # Check if score is negative
+                        if score < 0:
+                            last_date_campaign = {
+                                'Product': str(product),
+                                'Campaign Name': str(campaign_name),
+                                'C.P.P': round(cpp, 2),
+                                'B.E': round(be, 2),
+                                'Amount Spent (USD)': round(total_amount_spent_usd, 2),  # NEW: Added total amount spent
+                                'Last Date': format_date_readable(last_date),
+                                'Last Date Score': round(score, 2),
+                                'Last Date Amount Spent (USD)': round(amount_spent, 2),
+                                'Last Date Purchases': int(purchases),
+                                'Reason': f"Negative score ({round(score, 2)}) on last date ({format_date_readable(last_date)})"
+                            }
+                            
+                            last_date_negative_campaigns.append(last_date_campaign)
+
+        # Write last date negative campaigns to sheet (SECOND TABLE)
+        if last_date_negative_campaigns:
+            # Sort by score (worst first)
+            last_date_negative_campaigns.sort(key=lambda x: x['Last Date Score'])
+            
+            for campaign in last_date_negative_campaigns:
+                safe_write(negative_score_sheet, current_row, 0, campaign['Product'], last_date_data_format)
+                safe_write(negative_score_sheet, current_row, 1, campaign['Campaign Name'], last_date_data_format)
+                safe_write(negative_score_sheet, current_row, 2, campaign['C.P.P'], last_date_data_format)
+                safe_write(negative_score_sheet, current_row, 3, campaign['B.E'], last_date_data_format)
+                safe_write(negative_score_sheet, current_row, 4, campaign['Amount Spent (USD)'], last_date_data_format)  # NEW: Total Amount Spent
+                safe_write(negative_score_sheet, current_row, 5, campaign['Last Date'], last_date_data_format)
+                safe_write(negative_score_sheet, current_row, 6, campaign['Last Date Score'], last_date_data_format)
+                safe_write(negative_score_sheet, current_row, 7, campaign['Last Date Amount Spent (USD)'], last_date_data_format)
+                safe_write(negative_score_sheet, current_row, 8, campaign['Last Date Purchases'], last_date_data_format)
+                safe_write(negative_score_sheet, current_row, 9, campaign['Reason'], last_date_data_format)
+                current_row += 1
+        else:
+            # No last date negative campaigns found
+            safe_write(negative_score_sheet, current_row, 0, f"No campaigns found with negative score on last date ({format_date_readable(last_date) if last_date else 'N/A'})", last_date_data_format)
+            current_row += 1
+
+        # Add summary for second table
+        safe_write(negative_score_sheet, current_row + 1, 0, "SUMMARY - LAST DATE TABLE", last_date_header_format)
+        safe_write(negative_score_sheet, current_row + 2, 0, f"Last date analyzed: {format_date_readable(last_date) if last_date else 'N/A'}", last_date_data_format)
+        safe_write(negative_score_sheet, current_row + 3, 0, f"Campaigns with negative score on last date: {len(last_date_negative_campaigns)}", last_date_data_format)
+        safe_write(negative_score_sheet, current_row + 4, 0, f"Campaigns excluded (already in days checked table): {len(first_table_campaigns)}", last_date_data_format)
+
+        # Set column widths for negative score sheet - UPDATED for new columns
         negative_score_sheet.set_column(0, 0, 20)  # Product
         negative_score_sheet.set_column(1, 1, 35)  # Campaign Name
-        negative_score_sheet.set_column(2, 2, 15)  # Total Dates
-        negative_score_sheet.set_column(3, 3, 15)  # Days Checked
-        negative_score_sheet.set_column(4, 4, 20)  # Days with Negative Scores
-        negative_score_sheet.set_column(5, 5, 20)  # Average Negative Score
-        negative_score_sheet.set_column(6, 6, 30)  # Negative Score Dates
-        negative_score_sheet.set_column(7, 7, 40)  # Reason
-    
-    
-
-        
-        
-        
-        
+        negative_score_sheet.set_column(2, 2, 15)  # C.P.P
+        negative_score_sheet.set_column(3, 3, 15)  # B.E
+        negative_score_sheet.set_column(4, 4, 20)  # Amount Spent (USD)
+        negative_score_sheet.set_column(5, 5, 18)  # Score / Last Date
+        negative_score_sheet.set_column(6, 6, 15)  # Total Dates / Last Date Score
+        negative_score_sheet.set_column(7, 7, 15)  # Days Checked / Last Date Amount Spent
+        negative_score_sheet.set_column(8, 8, 25)  # Days with Negative Score / Last Date Purchases
+        negative_score_sheet.set_column(9, 9, 40)  # Negative Score Dates / Reason
+        negative_score_sheet.set_column(10, 10, 40)  # Reason (for first table)
         
     return output.getvalue()
-
-
-
 
 st.header("📥 Download Processed Files")
 
@@ -2800,8 +3099,6 @@ if campaign_files or shopify_files or old_merged_files:
         
         
     
-
-
 
 
 
